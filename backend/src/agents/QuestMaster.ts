@@ -97,7 +97,7 @@ export class QuestMaster extends EventEmitter {
   constructor(
     personality: QuestMasterPersonality,
     openaiApiKey: string,
-    model: string = "gpt-4-turbo-preview"
+    model: string = "gpt-4o"
   ) {
     super();
     this._personality = personality;
@@ -175,7 +175,7 @@ Respond with a JSON object in this exact format:
 }`;
 
       const completion = await this.openai.chat.completions.create({
-        model: "gpt-4-turbo-preview",
+        model: "gpt-4o",
         messages: [
           {
             role: "system",
@@ -187,6 +187,8 @@ Respond with a JSON object in this exact format:
       });
 
       const questResponse = completion.choices[0]?.message?.content;
+
+      console.log("questResponse from openai", questResponse);
       if (!questResponse) {
         throw new Error("No response from OpenAI");
       }
@@ -195,6 +197,8 @@ Respond with a JSON object in this exact format:
       let questData;
       try {
         questData = JSON.parse(questResponse);
+
+        console.log("questData", questData);
       } catch (parseError) {
         console.error("Failed to parse OpenAI response:", questResponse);
         throw new Error("Invalid JSON response from OpenAI");

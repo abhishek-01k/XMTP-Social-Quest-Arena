@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx --watch src/index.ts",
-    "gen:keys": "tsx scripts/generate-keys.ts",
+    "gen:keys": "rm -rf .data && tsx scripts/generate-keys.ts",
     "lint": "eslint src/**/*.ts",
     "start": "tsx src/index.ts"
   },

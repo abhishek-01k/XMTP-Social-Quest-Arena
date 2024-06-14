@@ -53,7 +53,7 @@ export default function GroupManagement() {
 
       await client.conversations.sync();
       const newConversations = await client.conversations.list();
-      setConversations(newConversations);
+      setConversations(newConversations as any);
 
       // Find the group in existing conversations
       let group = newConversations.find((conv) => conv.id === groupId) as
@@ -109,7 +109,7 @@ export default function GroupManagement() {
         setIsGroupJoined(true);
 
         const newConversations = await client.conversations.list();
-        setConversations(newConversations);
+        setConversations(newConversations as any);
 
         // Refresh group data
         refetchGroupData();
@@ -136,7 +136,7 @@ export default function GroupManagement() {
 
       if (data.success) {
         const newConversations = await client.conversations.list();
-        setConversations(newConversations);
+        setConversations(newConversations as any);
 
         setIsGroupJoined(false);
         setLocalGroupConversation(null);
@@ -167,7 +167,7 @@ export default function GroupManagement() {
 
   // Message sending handler
   const handleSendMessage = async () => {
-    console.log("Sending message:", groupConversation);
+    console.log("Sending message:", message);
     if (!client || !groupConversation || !message.trim()) return;
 
     setSending(true);

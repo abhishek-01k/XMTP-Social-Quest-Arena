@@ -41,7 +41,7 @@ const {
 ]);
 
 let GROUP_ID = process.env.GROUP_ID;
-
+console.log(GROUP_ID)
 // Global XMTP client
 let xmtpClient: Client;
 
@@ -58,7 +58,9 @@ const initializeQuestMasters = () => {
   questMasters.clear();
   
   QUEST_MASTER_PERSONALITIES.forEach((personality) => {
-    const questMaster = new QuestMaster(personality, OPENAI_API_KEY);
+    const openaiApiKey = process.env.OPENAI_API_KEY;
+    console.log("openai", openaiApiKey);
+    const questMaster = new QuestMaster(personality, openaiApiKey!);
     questMasters.set(personality.name, questMaster);
     
     // Listen for quest events
@@ -193,30 +195,55 @@ const removeUserFromDefaultGroupChat = async (
     return false;
   }
 };
+
 // XMTP Service Functions
 const addUserToDefaultGroupChat = async (
   newUserInboxId: string,
 ): Promise<boolean> => {
   try {
-    const conversation = await xmtpClient.conversations.getConversationById(
-      GROUP_ID ?? "",
-    );
+    let conversation: Group<any> | undefined;
+    
+    // If no GROUP_ID exists, create a new group
+    if (!GROUP_ID) {
+      console.log("🆕 No group exists, creating new group...");
+      const newGroup = await xmtpClient.conversations.newGroup([newUserInboxId]);
+      conversation = newGroup as Group<any>;
+      
+      if (conversation) {
+        GROUP_ID = conversation.id;
+        appendToEnv("GROUP_ID", GROUP_ID);
+        
+        // Set up the group
+        await conversation.updateName("XMTP Social Quest Arena");
+        await conversation.send("🎮 Welcome to the Social Quest Arena! You've joined the first group!");
+        
+        console.log("✅ Created new group with ID:", GROUP_ID);
+        return true;
+      } else {
+        throw new Error("Failed to create new group");
+      }
+    }
+    
+    // Try to get existing conversation
+    conversation = await xmtpClient.conversations.getConversationById(GROUP_ID) as Group<any>;
 
     if (!conversation) {
       throw new Error(
         `Conversation not found with id: ${GROUP_ID} on env: ${XMTP_ENV}`,
       );
     }
+    
     await conversation.sync();
     console.log("conversation", conversation.id);
-    const groupMembers = await (conversation as Group).members();
+    const groupMembers = await conversation.members();
     const isMember = groupMembers.some(
       (member) => member.inboxId === newUserInboxId,
     );
+    
     if (!isMember) {
       await conversation.sync();
-      await (conversation as Group).addMembers([newUserInboxId]);
-      await conversation.send("added to group");
+      await conversation.addMembers([newUserInboxId]);
+      await conversation.send(`🎉 ${newUserInboxId.slice(0, 6)}...${newUserInboxId.slice(-6)} joined the group!`);
       console.log("Added user to group");
     } else {
       console.log("User already in group");
@@ -325,14 +352,37 @@ app.get(
       console.log("🔵 Inside get-group-id async block");
       console.log("Current client inbox ID:", req.query.inboxId);
       console.log("Looking for group with ID:", GROUP_ID);
-      const conversation = await xmtpClient.conversations.getConversationById(
-        GROUP_ID ?? "",
-      );
+      
+      // If no GROUP_ID exists, return a response indicating no group
+      if (!GROUP_ID) {
+        console.log("⚠️ No group ID exists yet");
+        return res.json({
+          groupId: null,
+          groupName: "No group",
+          isMember: false,
+          memberCount: 0,
+          members: [],
+          lastMessage: null,
+          messageCount: 0,
+        });
+      }
+      
+      const conversation = await xmtpClient.conversations.getConversationById(GROUP_ID);
       console.log("🟢 Conversation fetched:", conversation?.id);
+      
       if (!conversation) {
         console.log("⚠️ No conversation found");
-        return res.status(404).json({ error: "Group not found" });
+        return res.json({
+          groupId: GROUP_ID,
+          groupName: "No group",
+          isMember: false,
+          memberCount: 0,
+          members: [],
+          lastMessage: null,
+          messageCount: 0,
+        });
       }
+      
       await conversation.sync();
       console.log("🟡 Conversation synced");
 
@@ -372,7 +422,7 @@ app.get(
         : null;
 
       const responseObject = {
-        groupId: process.env.GROUP_ID,
+        groupId: GROUP_ID,
         groupName: (conversation as Group).name,
         isMember,
         memberCount: groupMembers.length,
