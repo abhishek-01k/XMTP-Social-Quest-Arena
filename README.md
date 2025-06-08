@@ -50,7 +50,7 @@ An innovative AI-powered mini app that transforms group chats into dynamic socia
 
 1. **Navigate to backend directory**
    ```bash
-   cd miniapp/backend
+   cd backend
    ```
 
 2. **Install dependencies**
@@ -80,7 +80,7 @@ An innovative AI-powered mini app that transforms group chats into dynamic socia
 
 1. **Navigate to frontend directory**
    ```bash
-   cd miniapp/frontend
+   cd frontend
    ```
 
 2. **Install dependencies**
@@ -245,8 +245,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
-- **Discord**: [Join our community](https://discord.gg/xmtp)
-- **Twitter**: [@xmtp_](https://twitter.com/xmtp_)
 - **Documentation**: [docs.xmtp.org](https://docs.xmtp.org)
 
 ---
