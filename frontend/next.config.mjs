@@ -4,7 +4,7 @@ import createJITI from "jiti";
 const jiti = createJITI(fileURLToPath(import.meta.url));
 jiti("./src/lib/env.ts");
 
-const TerserPlugin = require('terser-webpack-plugin');
+import TerserPlugin from 'terser-webpack-plugin';
 
 
 /** @type {import('next').NextConfig} */

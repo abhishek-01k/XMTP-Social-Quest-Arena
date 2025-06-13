@@ -36,6 +36,7 @@
     "tailwind-merge": "^3.0.2",
     "tailwindcss-animate": "^1.0.7",
     "tailwindcss-inner-border": "^0.2.0",
+    "terser-webpack-plugin": "^5.3.14",
     "uint8array-extras": "^1.4.0",
     "viem": "^2.26.2",
     "wagmi": "^2.14.15",
