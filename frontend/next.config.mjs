@@ -4,6 +4,9 @@ import createJITI from "jiti";
 const jiti = createJITI(fileURLToPath(import.meta.url));
 jiti("./src/lib/env.ts");
 
+const TerserPlugin = require('terser-webpack-plugin');
+
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -30,12 +33,20 @@ const nextConfig = {
     'viem',
     'uint8array-extras'
   ],
-  webpack: (config, { isServer }) => {
+  webpack: (config, { dev , isServer }) => {
     // Add extensionAlias for .js
     config.resolve = config.resolve || {};
     config.resolve.extensionAlias = {
       ".js": [".ts", ".tsx", ".js", ".jsx"],
     };
+
+    if (!dev && !isServer) {
+      config.optimization.minimizer = [
+        new TerserPlugin({
+          exclude: /HeartbeatWorker\.js$/,
+        }),
+      ];
+    }
     
     if (!isServer) {
       config.module.rules.push({
