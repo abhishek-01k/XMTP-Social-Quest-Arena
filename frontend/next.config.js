@@ -7,6 +7,9 @@ jiti("./src/lib/env.ts");
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  experimental: {
+    esmExternals: "loose",
+  },
   images: {
     remotePatterns: [
       {
@@ -15,13 +18,25 @@ const nextConfig = {
       },
     ],
   },
-  transpilePackages: ['@farcaster/frame-wagmi-connector', '@farcaster/frame-sdk'],
+  transpilePackages: [
+    '@farcaster/frame-wagmi-connector', 
+    '@farcaster/frame-sdk',
+    '@farcaster/frame-core',
+    '@farcaster/frame-node',
+    '@farcaster/auth-client',
+    '@xmtp/browser-sdk',
+    '@wagmi/core',
+    'wagmi',
+    'viem',
+    'uint8array-extras'
+  ],
   webpack: (config, { isServer }) => {
     // Add extensionAlias for .js
     config.resolve = config.resolve || {};
     config.resolve.extensionAlias = {
       ".js": [".ts", ".tsx", ".js", ".jsx"],
     };
+    
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
@@ -34,6 +49,16 @@ const nextConfig = {
       config.module.rules.push({
         test: /\.node$/,
         loader: "null-loader",
+      });
+
+      // Handle problematic ES6 modules
+      config.module.rules.push({
+        test: /\.(js|mjs)$/,
+        include: /node_modules/,
+        type: "javascript/auto",
+        resolve: {
+          fullySpecified: false,
+        },
       });
     }
 
