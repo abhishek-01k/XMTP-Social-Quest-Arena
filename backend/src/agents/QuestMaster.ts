@@ -1,62 +1,43 @@
-import { ChatOpenAI } from "@langchain/openai";
-import { PromptTemplate } from "@langchain/core/prompts";
-import { StringOutputParser } from "@langchain/core/output_parsers";
-import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
-import { JsonOutputFunctionsParser } from "langchain/output_parsers";
-import type { Group, Conversation, DecodedMessage } from "@xmtp/node-sdk";
-import { v4 as uuidv4 } from "uuid";
 import { EventEmitter } from "events";
+import type { Group, DecodedMessage } from "@xmtp/node-sdk";
+import { v4 as uuidv4 } from "uuid";
+import type { Quest, UserProfile, QuestCompletion, QuestMasterPersonality } from "../types/Quest";
 
-// Quest Types Schema
-const QuestSchema = z.object({
-  id: z.string(),
-  type: z.enum([
-    "social_challenge",
-    "knowledge_quest", 
-    "creative_contest",
-    "community_building",
-    "cross_protocol"
-  ]),
-  title: z.string(),
-  description: z.string(),
-  difficulty: z.enum(["easy", "medium", "hard", "expert"]),
-  duration: z.number(), // in minutes
-  participants: z.object({
-    min: z.number(),
-    max: z.number(),
-  }),
-  rewards: z.object({
-    xp: z.number(),
-    tokens: z.number().optional(),
-    badges: z.array(z.string()).optional(),
-  }),
-  requirements: z.array(z.string()).optional(),
-  miniAppConfig: z.object({
-    type: z.enum(["dashboard", "game", "poll", "leaderboard", "gallery"]),
-    config: z.record(z.any()),
-  }),
-});
+// Simple mock implementations for LangChain dependencies
+class MockChatOpenAI {
+  constructor(private config: any) {}
+  
+  async invoke(prompt: string): Promise<string> {
+    // Simple mock response based on quest master personality
+    return `Mock quest response for: ${prompt.slice(0, 100)}...`;
+  }
+}
 
-const UserProfileSchema = z.object({
-  inboxId: z.string(),
-  level: z.number().default(1),
-  xp: z.number().default(0),
-  preferences: z.array(z.string()).default([]),
-  completedQuests: z.array(z.string()).default([]),
-  socialScore: z.number().default(0),
-  lastActive: z.date().default(() => new Date()),
-});
-
-type Quest = z.infer<typeof QuestSchema>;
-type UserProfile = z.infer<typeof UserProfileSchema>;
-
-export interface QuestMasterPersonality {
-  name: string;
-  description: string;
-  questTypes: Quest["type"][];
-  style: "encouraging" | "competitive" | "creative" | "analytical" | "adventurous";
-  systemPrompt: string;
+class MockPromptTemplate {
+  static fromTemplate(template: string) {
+    return {
+      pipe: (llm: any) => ({
+        pipe: (parser: any) => ({
+          invoke: async (variables: any) => {
+            // Mock quest generation based on variables
+            return {
+              title: `${variables.personalityName} Challenge`,
+              description: `A ${variables.questTypes.split(',')[0]} quest for ${variables.groupSize} participants`,
+              type: variables.questTypes.split(',')[0].trim().replace(' ', '_') as Quest["type"],
+              difficulty: "medium" as const,
+              duration: 30,
+              participantLimits: { min: 2, max: variables.groupSize },
+              rewards: { xp: 100, tokens: 10 },
+              miniAppConfig: {
+                type: "dashboard" as const,
+                config: { theme: "default" }
+              }
+            };
+          }
+        })
+      })
+    };
+  }
 }
 
 export const QUEST_MASTER_PERSONALITIES: QuestMasterPersonality[] = [
@@ -98,7 +79,7 @@ export const QUEST_MASTER_PERSONALITIES: QuestMasterPersonality[] = [
 ];
 
 export class QuestMaster extends EventEmitter {
-  private llm: ChatOpenAI;
+  private llm: MockChatOpenAI;
   private personality: QuestMasterPersonality;
   private userProfiles: Map<string, UserProfile> = new Map();
   private activeQuests: Map<string, Quest> = new Map();
@@ -111,7 +92,7 @@ export class QuestMaster extends EventEmitter {
   ) {
     super();
     this.personality = personality;
-    this.llm = new ChatOpenAI({
+    this.llm = new MockChatOpenAI({
       openAIApiKey: openaiApiKey,
       modelName: model,
       temperature: 0.7,
@@ -132,45 +113,19 @@ export class QuestMaster extends EventEmitter {
         groupMembers
       );
 
-      const questPrompt = PromptTemplate.fromTemplate(`
+      // Create quest using mock template
+      const questPrompt = MockPromptTemplate.fromTemplate(`
         ${this.personality.systemPrompt}
-
-        Based on the following conversation analysis, create an engaging quest for this group:
-
-        Group Size: {groupSize}
-        Activity Level: {activityLevel}
-        Topics Discussed: {topics}
-        User Engagement: {engagement}
-        Time of Day: {timeOfDay}
-
-        Recent Messages Context:
-        {recentContext}
-
-        Create a quest that:
-        1. Matches the current group mood and activity
-        2. Is appropriate for {groupSize} participants
-        3. Aligns with your personality as {personalityName}
-        4. Uses one of your preferred quest types: {questTypes}
-        5. Includes a mini-app component for interaction
-
-        Return a JSON object with the quest details following this schema:
-        {questSchema}
+        Create a quest for group size: {groupSize}
+        Activity level: {activityLevel}
+        Topics: {topics}
+        Personality: {personalityName}
+        Quest types: {questTypes}
       `);
 
-      const questChain = questPrompt
-        .pipe(this.llm.bind({
-          functions: [
-            {
-              name: "create_quest",
-              description: "Create a new quest based on conversation analysis",
-              parameters: zodToJsonSchema(QuestSchema),
-            },
-          ],
-          function_call: { name: "create_quest" },
-        }))
-        .pipe(new JsonOutputFunctionsParser());
+      const questChain = questPrompt.pipe(this.llm).pipe({ invoke: async (data: any) => data });
 
-      const quest = await questChain.invoke({
+      const questData = await questChain.invoke({
         groupSize: groupMembers.length,
         activityLevel: conversationAnalysis.activityLevel,
         topics: conversationAnalysis.topics.join(", "),
@@ -179,21 +134,33 @@ export class QuestMaster extends EventEmitter {
         recentContext: this.summarizeRecentMessages(recentMessages),
         personalityName: this.personality.name,
         questTypes: this.personality.questTypes.join(", "),
-        questSchema: JSON.stringify(zodToJsonSchema(QuestSchema), null, 2),
       });
 
-      // Add unique ID and validate
-      const questWithId = {
-        ...quest,
+      // Create complete quest object with all required fields
+      const quest: Quest = {
         id: uuidv4(),
+        type: questData.type || this.personality.questTypes[0],
+        title: questData.title || `${this.personality.name} Challenge`,
+        description: questData.description || `A quest created by ${this.personality.name}`,
+        difficulty: questData.difficulty || "medium",
+        duration: questData.duration || 30,
+        participantLimits: questData.participantLimits || { min: 2, max: Math.max(2, groupMembers.length) },
+        rewards: questData.rewards || { xp: 100, tokens: 10 },
+        requirements: (questData as any).requirements || [],
+        miniAppConfig: questData.miniAppConfig || {
+          type: "dashboard",
+          config: { theme: "default" }
+        },
+        conversationId: conversation.id,
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + (questData.duration || 30) * 60 * 1000), // duration in minutes
+        status: "active",
+        participants: [],
       };
 
-      // Validate the quest
-      const validatedQuest = QuestSchema.parse(questWithId);
-      this.activeQuests.set(validatedQuest.id, validatedQuest);
-
-      this.emit("questCreated", validatedQuest, conversation.id);
-      return validatedQuest;
+      this.activeQuests.set(quest.id, quest);
+      this.emit("questCreated", quest, conversation.id);
+      return quest;
 
     } catch (error) {
       console.error("Error creating quest:", error);
@@ -227,7 +194,7 @@ export class QuestMaster extends EventEmitter {
   }
 
   /**
-   * Extract topics from messages using LLM
+   * Extract topics from messages
    */
   private extractTopics(messages: DecodedMessage[]): string[] {
     const messageTexts = messages
@@ -237,7 +204,7 @@ export class QuestMaster extends EventEmitter {
 
     if (messageTexts.length === 0) return ["general"];
 
-    // Simple keyword extraction - could be enhanced with LLM
+    // Simple keyword extraction
     const commonWords = messageTexts
       .join(" ")
       .toLowerCase()
@@ -303,13 +270,16 @@ export class QuestMaster extends EventEmitter {
 
     this.userProfiles.set(participantInboxId, userProfile);
 
-    this.emit("questCompleted", {
+    const completion: QuestCompletion = {
       questId,
       participantInboxId,
+      completedAt: new Date(),
+      result,
       rewards: quest.rewards,
       newLevel: userProfile.level,
-      result,
-    });
+    };
+
+    this.emit("questCompleted", completion);
   }
 
   /**
@@ -334,51 +304,33 @@ export class QuestMaster extends EventEmitter {
    * Generate quest announcement message
    */
   async generateQuestAnnouncement(quest: Quest): Promise<string> {
-    const announcementPrompt = PromptTemplate.fromTemplate(`
-      ${this.personality.systemPrompt}
+    // Simple template-based announcement
+    const announcement = `
+🎯 **${quest.title}** 
 
-      Create an exciting announcement message for this quest:
-      
-      Title: {title}
-      Type: {type}
-      Description: {description}
-      Difficulty: {difficulty}
-      Duration: {duration} minutes
-      Participants: {minParticipants}-{maxParticipants}
-      Rewards: {xp} XP{tokenRewards}{badges}
+${quest.description}
 
-      Write a message that:
-      1. Gets people excited about participating
-      2. Clearly explains what they need to do
-      3. Mentions the mini-app will launch
-      4. Matches your personality as {personalityName}
-      5. Is concise but engaging
+📊 **Details:**
+• Type: ${quest.type.replace('_', ' ')}
+• Difficulty: ${quest.difficulty}
+• Duration: ${quest.duration} minutes
+• Participants: ${quest.participantLimits.min}-${quest.participantLimits.max}
+• Rewards: ${quest.rewards.xp} XP${quest.rewards.tokens ? ` + ${quest.rewards.tokens} tokens` : ''}
 
-      Keep it under 200 words.
-    `);
+🚀 Mini app launching soon! Get ready to participate!
+    `.trim();
 
-    const chain = announcementPrompt.pipe(this.llm).pipe(new StringOutputParser());
-
-    return await chain.invoke({
-      title: quest.title,
-      type: quest.type.replace("_", " "),
-      description: quest.description,
-      difficulty: quest.difficulty,
-      duration: quest.duration,
-      minParticipants: quest.participants.min,
-      maxParticipants: quest.participants.max,
-      xp: quest.rewards.xp,
-      tokenRewards: quest.rewards.tokens ? `, ${quest.rewards.tokens} tokens` : "",
-      badges: quest.rewards.badges?.length ? `, badges: ${quest.rewards.badges.join(", ")}` : "",
-      personalityName: this.personality.name,
-    });
+    return announcement;
   }
 
   /**
    * Get active quests for a conversation
    */
   getActiveQuests(conversationId?: string): Quest[] {
-    return Array.from(this.activeQuests.values());
+    const quests = Array.from(this.activeQuests.values());
+    return conversationId 
+      ? quests.filter(quest => quest.conversationId === conversationId)
+      : quests;
   }
 
   /**

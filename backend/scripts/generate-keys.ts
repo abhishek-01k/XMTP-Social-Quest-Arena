@@ -1,50 +1,54 @@
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { generateEncryptionKeyHex } from "../src/helper";
+import { generateEncryptionKeyHex, createSigner } from "../src/helper";
+import { appendToEnv } from "../src/helper";
+import { getRandomValues } from "node:crypto";
+import { toString } from "uint8arrays";
 
-// Check Node.js version
-const nodeVersion = process.versions.node;
-const [major] = nodeVersion.split(".").map(Number);
-if (major < 20) {
-  console.error("Error: Node.js version 20 or higher is required");
-  process.exit(1);
+/**
+ * Generate a random private key
+ */
+function generatePrivateKey(): string {
+  const randomBytes = getRandomValues(new Uint8Array(32));
+  return "0x" + toString(randomBytes, "hex");
 }
 
-console.log("Generating keys for example...");
+/**
+ * Generate XMTP keys and append to .env file
+ */
+async function generateKeys() {
+  console.log("🔑 Generating XMTP keys...");
 
-const walletKey = generatePrivateKey();
-const account = privateKeyToAccount(walletKey);
-const encryptionKeyHex = generateEncryptionKeyHex();
-const publicKey = account.address;
+  try {
+    // Generate wallet private key
+    const walletKey = generatePrivateKey();
+    console.log("✅ Generated wallet private key");
 
-// Get the current working directory (should be the example directory)
-const exampleDir = process.cwd();
-const exampleName = exampleDir.split("/").pop() || "example";
-const filePath = join(exampleDir, ".env");
+    // Generate encryption key
+    const encryptionKey = generateEncryptionKeyHex();
+    console.log("✅ Generated encryption key");
 
-console.log(`Creating .env file in: ${exampleDir}`);
+    // Create signer to get public key
+    const signer = createSigner(walletKey);
+    const identifier = await Promise.resolve(signer.getIdentifier());
+    const publicKey = identifier.identifier;
 
-// Read existing .env file if it exists
-let existingEnv = "";
-try {
-  existingEnv = await readFile(filePath, "utf-8");
-  console.log("Found existing .env file");
-} catch {
-  // File doesn't exist, that's fine
-  console.log("No existing .env file found, creating new one");
+    console.log("\n📝 Generated keys:");
+    console.log("Private Key:", walletKey);
+    console.log("Public Key:", publicKey);
+    console.log("Encryption Key:", encryptionKey);
+
+    // Append to .env file
+    appendToEnv("WALLET_KEY", walletKey);
+    appendToEnv("ENCRYPTION_KEY", encryptionKey);
+    appendToEnv("XMTP_ENV", "dev");
+
+    console.log("\n✅ Keys have been added to .env file");
+    console.log("🎉 Setup complete! You can now run your XMTP agent.");
+
+  } catch (error) {
+    console.error("❌ Error generating keys:", error);
+    process.exit(1);
+  }
 }
 
-// Check if XMTP_ENV is already set
-const xmtpEnvExists = existingEnv.includes("XMTP_ENV=");
-
-const envContent = `# XMTP keys for ${exampleName}
-WALLET_KEY="${walletKey}"
-ENCRYPTION_KEY="${encryptionKeyHex}"
-${!xmtpEnvExists ? "XMTP_ENV=dev\n" : ""}# public key is ${publicKey}
-`;
-
-// Write the .env file to the example directory
-await writeFile(filePath, envContent, { flag: "a" });
-console.log(`Keys written to ${filePath}`);
-console.log(`Public key: ${publicKey}`);
+// Run the key generation
+generateKeys().catch(console.error);
