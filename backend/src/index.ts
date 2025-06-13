@@ -108,28 +108,32 @@ const initializeXmtpClient = async () => {
   if (GROUP_ID) {
     const conv = await xmtpClient.conversations.getConversationById(GROUP_ID);
     conversation = conv instanceof Group ? conv : undefined;
-  } else {
+  } else if (defaultInboxes.length > 0) {
     conversation = await xmtpClient.conversations.newGroup(defaultInboxes);
     console.log("🆕 New group created:", conversation.id);
     GROUP_ID = conversation.id;
     appendToEnv("GROUP_ID", GROUP_ID);
+  } else {
+    console.log("⚠️ No default group created - will create groups dynamically");
   }
   
-  if (!conversation) {
-    console.error("❌ Failed to initialize XMTP client");
+  if (!conversation && GROUP_ID) {
+    console.error("❌ Failed to initialize XMTP client - conversation not found");
     return;
   }
 
-  await conversation.updateName("XMTP Social Quest Arena");
+  if (conversation) {
+    await conversation.updateName("XMTP Social Quest Arena");
 
-  const message = await conversation.send("🎮 Welcome to the Social Quest Arena! AI Quest Masters are standing by to create amazing challenges for our community!");
-  console.log("💬 Welcome message sent:", message);
+    const message = await conversation.send("🎮 Welcome to the Social Quest Arena! AI Quest Masters are standing by to create amazing challenges for our community!");
+    console.log("💬 Welcome message sent:", message);
 
-  await xmtpClient.conversations.sync();
+    await xmtpClient.conversations.sync();
 
-  const isAdmin = conversation.isSuperAdmin(xmtpClient.inboxId);
-  await conversation.sync();
-  console.log("👑 Client is admin of the group:", isAdmin);
+    const isAdmin = conversation.isSuperAdmin(xmtpClient.inboxId);
+    await conversation.sync();
+    console.log("👑 Client is admin of the group:", isAdmin);
+  }
   
   // Initialize services
   questOrchestrator = new QuestOrchestrator(questMasters, xmtpClient);
@@ -370,19 +374,6 @@ app.get(
   },
 );
 
-// Start Server
-void (async () => {
-  try {
-    await initializeXmtpClient();
-    app.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}`);
-    });
-  } catch (error) {
-    console.error("Failed to initialize XMTP client:", error);
-    process.exit(1);
-  }
-})();
-
 // Broadcast message to all connected WebSocket clients
 const broadcastToClients = (message: any) => {
   if (!wss) return;
@@ -394,37 +385,131 @@ const broadcastToClients = (message: any) => {
   });
 };
 
-// WebSocket Setup for real-time updates
-wss = new WebSocketServer({ server });
+// Initialize WebSocket server
+const initializeWebSocketServer = () => {
+  wss = new WebSocketServer({ server });
 
-wss.on("connection", (ws: any) => {
-  console.log("🔌 New WebSocket connection");
-  
-  ws.on("message", (data: any) => {
-    try {
-      const message = JSON.parse(data.toString());
-      console.log("📨 WebSocket message received:", message);
-      
-      // Handle different message types
-      switch (message.type) {
-        case "subscribe":
-          // Client subscribing to updates
-          ws.send(JSON.stringify({ type: "subscribed", data: "Connected to Quest Arena" }));
-          break;
-        case "questAction":
-          // Handle quest-related actions
-          void handleQuestAction(message.data, ws);
-          break;
+  wss.on("connection", (ws: any) => {
+    console.log("🔌 New WebSocket connection");
+    
+    ws.on("message", (data: any) => {
+      try {
+        const message = JSON.parse(data.toString());
+        console.log("📨 WebSocket message received:", message);
+        
+        // Handle different message types
+        switch (message.type) {
+          case "subscribe":
+            // Client subscribing to updates
+            ws.send(JSON.stringify({ type: "subscribed", data: "Connected to Quest Arena" }));
+            break;
+          case "questAction":
+            // Handle quest-related actions
+            void handleQuestAction(message.data, ws);
+            break;
+        }
+      } catch (error) {
+        console.error("❌ Error handling WebSocket message:", error);
       }
-    } catch (error) {
-      console.error("❌ Error handling WebSocket message:", error);
-    }
+    });
+    
+    ws.on("close", () => {
+      console.log("🔌 WebSocket connection closed");
+    });
   });
-  
-  ws.on("close", () => {
-    console.log("🔌 WebSocket connection closed");
-  });
+};
+
+// Quest API endpoints
+app.get("/api/quests/active", validateApiSecret, async (req: Request, res: Response) => {
+  try {
+    const activeQuests = questOrchestrator ? questOrchestrator.getActiveQuests() : [];
+    res.json(activeQuests);
+  } catch (error) {
+    console.error("❌ Error fetching active quests:", error);
+    res.status(500).json({ error: "Failed to fetch active quests" });
+  }
 });
+
+app.get("/api/quests/user/:inboxId/stats", validateApiSecret, async (req: Request, res: Response) => {
+  try {
+    const { inboxId } = req.params;
+    const stats = questOrchestrator ? questOrchestrator.getUserStats(inboxId) : null;
+    res.json(stats || { level: 1, xp: 0, questsCompleted: 0, socialScore: 0 });
+  } catch (error) {
+    console.error("❌ Error fetching user stats:", error);
+    res.status(500).json({ error: "Failed to fetch user stats" });
+  }
+});
+
+app.post("/api/quests/trigger", validateApiSecret, async (req: Request, res: Response) => {
+  try {
+    // Manually trigger quest creation for testing
+    const { conversationId } = req.body;
+    
+    if (!conversationId || !questOrchestrator) {
+      return res.status(400).json({ error: "Missing conversationId or quest system not initialized" });
+    }
+    
+    const conversation = await xmtpClient.conversations.getConversationById(conversationId);
+    if (!conversation || !(conversation instanceof Group)) {
+      return res.status(404).json({ error: "Conversation not found" });
+    }
+    
+    // Select a random quest master
+    const questMasterNames = Array.from(questMasters.keys());
+    const randomQuestMaster = questMasters.get(
+      questMasterNames[Math.floor(Math.random() * questMasterNames.length)]
+    );
+    
+    if (randomQuestMaster) {
+      const members = await conversation.members();
+      const recentMessages = await conversation.messages({ limit: 10 });
+      
+      const quest = await randomQuestMaster.analyzeAndCreateQuest(
+        conversation,
+        recentMessages,
+        members
+      );
+      
+      if (quest) {
+        const announcement = await randomQuestMaster.generateQuestAnnouncement(quest);
+        await conversation.send(announcement);
+        res.json({ success: true, quest });
+      } else {
+        res.json({ success: false, message: "No quest created" });
+      }
+    } else {
+      res.status(500).json({ error: "No quest masters available" });
+    }
+  } catch (error) {
+    console.error("❌ Error triggering quest:", error);
+    res.status(500).json({ error: "Failed to trigger quest" });
+  }
+});
+
+// Start Server
+void (async () => {
+  try {
+    // Initialize Quest Masters
+    initializeQuestMasters();
+    
+    // Initialize XMTP client
+    await initializeXmtpClient();
+    
+    // Start HTTP server
+    server.listen(PORT, () => {
+      console.log(`🚀 Server is running on port ${PORT}`);
+      console.log(`🔌 WebSocket server ready for connections`);
+    });
+    
+    // Initialize WebSocket server after HTTP server starts
+    initializeWebSocketServer();
+    
+  } catch (error) {
+    console.error("Failed to initialize server:", error);
+    process.exit(1);
+  }
+})();
 
 // Handle quest actions from frontend
 const handleQuestAction = async (data: any, ws: any) => {

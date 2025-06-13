@@ -9,9 +9,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { sepolia } from "viem/chains";
 
 export const defaultInboxes = [
-  "7435ec73baafc744854c47984719584403dd7b0ad65070770324dd86b3ab38d9",
-  "02182d1d0c6f3aeece34e3a6fb5dc8519ef2b2f904af6bd8c41862ac6e4fb2fe",
-  "93ee50a432bb65046aef5b9b846fb85ce73d2d0d1c5107ebad642263c4ae2b9d",
+  // Remove default inboxes for now to avoid verification issues
 ];
 // XMTP Utilities
 export interface User {
@@ -69,7 +67,9 @@ export const generateEncryptionKeyHex = () => {
 };
 
 export const getEncryptionKeyFromHex = (hex: string) => {
-  return fromString(hex, "hex");
+  // Remove '0x' prefix if present
+  const cleanHex = hex.startsWith('0x') ? hex.slice(2) : hex;
+  return fromString(cleanHex, "hex");
 };
 
 /**
