@@ -8,6 +8,18 @@ export async function GET() {
     Pragma: "no-cache",
   };
 
+  // During build time, return a default response without trying to connect to backend
+  if (process.env.NODE_ENV === "production" && !process.env.BACKEND_URL?.startsWith("http")) {
+    return NextResponse.json(
+      {
+        status: "build",
+        backend: "build-time",
+        timestamp: Date.now(),
+      },
+      { headers },
+    );
+  }
+
   try {
     // Add timestamp to prevent caching
     const timestamp = Date.now();

@@ -34,6 +34,9 @@ export default function ConnectionInfo({
   // Detect wallet environment and injectors
   useEffect(() => {
     const checkBackendHealth = async () => {
+      // Only check backend health on the client side, not during build
+      if (typeof window === "undefined") return;
+      
       try {
         const response = await fetch("/api/proxy/health");
         const data = await response.json();
