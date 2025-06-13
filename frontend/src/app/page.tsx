@@ -3,7 +3,7 @@ import { Metadata } from "next";
 import { OG_IMAGE_SIZE } from "@/lib/constants";
 import { env } from "@/lib/env";
 import { getFrameMetadata } from "@/lib/frame";
-import Page from "@/pages/page";
+import Page from "@/pages/Page";
 
 type Props = {
   params: Promise<{ conversationId: string }>;
