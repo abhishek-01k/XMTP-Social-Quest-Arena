@@ -38,6 +38,10 @@ const nextConfig = {
     };
     
     if (!isServer) {
+      config.module.rules.push({
+        test: /HeartbeatWorker\.js$/,
+        type: 'asset/source',
+      });
       config.resolve.fallback = {
         ...config.resolve.fallback,
         fs: false,
