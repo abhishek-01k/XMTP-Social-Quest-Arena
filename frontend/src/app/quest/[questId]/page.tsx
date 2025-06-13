@@ -1,39 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams } from "next/navigation";
 import { Button } from "@/components/Button";
 import { SafeAreaContainer } from "@/components/SafeAreaContainer";
 import { useXMTP } from "@/context/xmtp-context";
-
-interface QuestDetails {
-  questId: string;
-  conversationId: string;
-  type: string;
-  config: {
-    title: string;
-    description: string;
-    difficulty: string;
-    duration: number;
-    rewards: {
-      xp: number;
-      tokens?: number;
-      badges?: string[];
-    };
-    participantLimits: {
-      min: number;
-      max: number;
-    };
-    requirements?: string[];
-  };
-  launchedAt: string;
-  url: string;
-  status: 'active' | 'completed' | 'expired';
-  participants: string[];
-}
+import type { MiniAppConfig } from "@/types/quest";
 
 interface QuestResponse {
-  quest: QuestDetails;
+  quest: MiniAppConfig;
   participants: string[];
   isActive: boolean;
   url: string;
@@ -41,13 +16,9 @@ interface QuestResponse {
 
 export default function QuestPage() {
   const params = useParams();
-  const searchParams = useSearchParams();
   const { client } = useXMTP();
   
   const questId = params?.questId as string;
-  const conversationId = searchParams?.get('conversationId');
-  const questType = searchParams?.get('type');
-  const questTitle = searchParams?.get('title');
   
   const [questDetails, setQuestDetails] = useState<QuestResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,11 +31,7 @@ export default function QuestPage() {
     const fetchQuestDetails = async () => {
       try {
         setLoading(true);
-        const response = await fetch(`/api/quests/${questId}`, {
-          headers: {
-            'x-api-secret': process.env.NEXT_PUBLIC_API_SECRET || 'xmtp-social-quest-arena-secret-key-2024',
-          },
-        });
+        const response = await fetch(`/api/quests/${questId}`);
 
         if (!response.ok) {
           throw new Error('Failed to fetch quest details');
@@ -99,7 +66,6 @@ export default function QuestPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-secret': process.env.NEXT_PUBLIC_API_SECRET || 'xmtp-social-quest-arena-secret-key-2024',
         },
         body: JSON.stringify({ inboxId: client.inboxId }),
       });
@@ -107,11 +73,7 @@ export default function QuestPage() {
       if (response.ok) {
         setIsParticipant(true);
         // Refresh quest details
-        const updatedResponse = await fetch(`/api/quests/${questId}`, {
-          headers: {
-            'x-api-secret': process.env.NEXT_PUBLIC_API_SECRET || 'xmtp-social-quest-arena-secret-key-2024',
-          },
-        });
+        const updatedResponse = await fetch(`/api/quests/${questId}`);
         if (updatedResponse.ok) {
           const updatedData: QuestResponse = await updatedResponse.json();
           setQuestDetails(updatedData);
@@ -137,7 +99,6 @@ export default function QuestPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-secret': process.env.NEXT_PUBLIC_API_SECRET || 'xmtp-social-quest-arena-secret-key-2024',
         },
         body: JSON.stringify({ inboxId: client.inboxId }),
       });
@@ -145,11 +106,7 @@ export default function QuestPage() {
       if (response.ok) {
         setIsParticipant(false);
         // Refresh quest details
-        const updatedResponse = await fetch(`/api/quests/${questId}`, {
-          headers: {
-            'x-api-secret': process.env.NEXT_PUBLIC_API_SECRET || 'xmtp-social-quest-arena-secret-key-2024',
-          },
-        });
+        const updatedResponse = await fetch(`/api/quests/${questId}`);
         if (updatedResponse.ok) {
           const updatedData: QuestResponse = await updatedResponse.json();
           setQuestDetails(updatedData);
@@ -175,7 +132,6 @@ export default function QuestPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-secret': process.env.NEXT_PUBLIC_API_SECRET || 'xmtp-social-quest-arena-secret-key-2024',
         },
         body: JSON.stringify({ 
           inboxId: client.inboxId,
@@ -185,11 +141,7 @@ export default function QuestPage() {
 
       if (response.ok) {
         // Refresh quest details
-        const updatedResponse = await fetch(`/api/quests/${questId}`, {
-          headers: {
-            'x-api-secret': process.env.NEXT_PUBLIC_API_SECRET || 'xmtp-social-quest-arena-secret-key-2024',
-          },
-        });
+        const updatedResponse = await fetch(`/api/quests/${questId}`);
         if (updatedResponse.ok) {
           const updatedData: QuestResponse = await updatedResponse.json();
           setQuestDetails(updatedData);
@@ -208,11 +160,11 @@ export default function QuestPage() {
   // Get quest type emoji
   const getQuestEmoji = (type: string) => {
     const emojiMap: Record<string, string> = {
-      'social_challenge': '🤝',
-      'knowledge_quest': '🧠',
-      'creative_contest': '🎨',
-      'community_building': '🏘️',
-      'cross_protocol': '🌐',
+      'dashboard': '📊',
+      'game': '🎮',
+      'poll': '📊',
+      'leaderboard': '🏆',
+      'gallery': '🎨',
     };
     return emojiMap[type] || '🎯';
   };
@@ -277,6 +229,7 @@ export default function QuestPage() {
   }
 
   const quest = questDetails.quest;
+  const config = quest.config as any;
 
   return (
     <SafeAreaContainer>
@@ -300,58 +253,68 @@ export default function QuestPage() {
             {/* Quest Header */}
             <div className="text-center">
               <div className="text-6xl mb-2">{getQuestEmoji(quest.type)}</div>
-              <h1 className="text-2xl font-bold text-white mb-2">{quest.config.title}</h1>
-              <div className="flex items-center justify-center gap-2 mb-4">
-                <span className="text-yellow-400">{getDifficultyStars(quest.config.difficulty)}</span>
-                <span className="text-gray-400">•</span>
-                <span className="text-purple-400">{quest.config.difficulty.toUpperCase()}</span>
-              </div>
+              <h1 className="text-2xl font-bold text-white mb-2">{config.title || 'Quest'}</h1>
+              {config.difficulty && (
+                <div className="flex items-center justify-center gap-2 mb-4">
+                  <span className="text-yellow-400">{getDifficultyStars(config.difficulty)}</span>
+                  <span className="text-gray-400">•</span>
+                  <span className="text-purple-400">{config.difficulty.toUpperCase()}</span>
+                </div>
+              )}
             </div>
 
             {/* Description */}
-            <div className="bg-gray-900 rounded-lg p-4">
-              <h3 className="text-lg font-semibold text-white mb-2">Description</h3>
-              <p className="text-gray-300">{quest.config.description}</p>
-            </div>
+            {config.description && (
+              <div className="bg-gray-900 rounded-lg p-4">
+                <h3 className="text-lg font-semibold text-white mb-2">Description</h3>
+                <p className="text-gray-300">{config.description}</p>
+              </div>
+            )}
 
             {/* Quest Info */}
             <div className="grid grid-cols-2 gap-4">
-              <div className="bg-gray-900 rounded-lg p-4">
-                <h4 className="text-sm font-semibold text-gray-400 mb-1">Duration</h4>
-                <p className="text-white">{quest.config.duration} minutes</p>
-              </div>
-              <div className="bg-gray-900 rounded-lg p-4">
-                <h4 className="text-sm font-semibold text-gray-400 mb-1">XP Reward</h4>
-                <p className="text-yellow-400 font-bold">{quest.config.rewards.xp} XP</p>
-              </div>
+              {config.duration && (
+                <div className="bg-gray-900 rounded-lg p-4">
+                  <h4 className="text-sm font-semibold text-gray-400 mb-1">Duration</h4>
+                  <p className="text-white">{config.duration} minutes</p>
+                </div>
+              )}
+              {config.rewards?.xp && (
+                <div className="bg-gray-900 rounded-lg p-4">
+                  <h4 className="text-sm font-semibold text-gray-400 mb-1">XP Reward</h4>
+                  <p className="text-yellow-400 font-bold">{config.rewards.xp} XP</p>
+                </div>
+              )}
             </div>
 
             {/* Participants */}
-            <div className="bg-gray-900 rounded-lg p-4">
-              <h4 className="text-sm font-semibold text-gray-400 mb-2">
-                Participants ({questDetails.participants.length}/{quest.config.participantLimits.max})
-              </h4>
-              <div className="flex items-center gap-2">
-                <div className="flex-1 bg-gray-800 rounded-full h-2">
-                  <div 
-                    className="bg-purple-500 h-2 rounded-full transition-all duration-300"
-                    style={{ 
-                      width: `${Math.min(100, (questDetails.participants.length / quest.config.participantLimits.max) * 100)}%` 
-                    }}
-                  ></div>
+            {config.participantLimits && (
+              <div className="bg-gray-900 rounded-lg p-4">
+                <h4 className="text-sm font-semibold text-gray-400 mb-2">
+                  Participants ({questDetails.participants.length}/{config.participantLimits.max})
+                </h4>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 bg-gray-800 rounded-full h-2">
+                    <div 
+                      className="bg-purple-500 h-2 rounded-full transition-all duration-300"
+                      style={{ 
+                        width: `${Math.min(100, (questDetails.participants.length / config.participantLimits.max) * 100)}%` 
+                      }}
+                    ></div>
+                  </div>
+                  <span className="text-sm text-gray-400">
+                    {questDetails.participants.length}/{config.participantLimits.max}
+                  </span>
                 </div>
-                <span className="text-sm text-gray-400">
-                  {questDetails.participants.length}/{quest.config.participantLimits.max}
-                </span>
               </div>
-            </div>
+            )}
 
             {/* Requirements */}
-            {quest.config.requirements && quest.config.requirements.length > 0 && (
+            {config.requirements && config.requirements.length > 0 && (
               <div className="bg-gray-900 rounded-lg p-4">
                 <h4 className="text-sm font-semibold text-gray-400 mb-2">Requirements</h4>
                 <ul className="space-y-1">
-                  {quest.config.requirements.map((req, index) => (
+                  {config.requirements.map((req: string, index: number) => (
                     <li key={index} className="text-gray-300 text-sm flex items-center gap-2">
                       <span className="text-purple-400">•</span>
                       {req}
@@ -362,33 +325,52 @@ export default function QuestPage() {
             )}
 
             {/* Rewards */}
-            <div className="bg-gray-900 rounded-lg p-4">
-              <h4 className="text-sm font-semibold text-gray-400 mb-2">Rewards</h4>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-300">Experience Points</span>
-                  <span className="text-yellow-400 font-bold">{quest.config.rewards.xp} XP</span>
-                </div>
-                {quest.config.rewards.tokens && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-300">Tokens</span>
-                    <span className="text-green-400 font-bold">{quest.config.rewards.tokens}</span>
-                  </div>
-                )}
-                {quest.config.rewards.badges && quest.config.rewards.badges.length > 0 && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-300">Badges</span>
-                    <div className="flex gap-1">
-                      {quest.config.rewards.badges.map((badge, index) => (
-                        <span key={index} className="text-xs bg-purple-600 text-white px-2 py-1 rounded">
-                          {badge}
-                        </span>
-                      ))}
+            {config.rewards && (
+              <div className="bg-gray-900 rounded-lg p-4">
+                <h4 className="text-sm font-semibold text-gray-400 mb-2">Rewards</h4>
+                <div className="space-y-2">
+                  {config.rewards.xp && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Experience Points</span>
+                      <span className="text-yellow-400 font-bold">{config.rewards.xp} XP</span>
                     </div>
-                  </div>
-                )}
+                  )}
+                  {config.rewards.tokens && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Tokens</span>
+                      <span className="text-green-400 font-bold">{config.rewards.tokens}</span>
+                    </div>
+                  )}
+                  {config.rewards.badges && config.rewards.badges.length > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Badges</span>
+                      <div className="flex gap-1">
+                        {config.rewards.badges.map((badge: string, index: number) => (
+                          <span key={index} className="text-xs bg-purple-600 text-white px-2 py-1 rounded">
+                            {badge}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
+
+            {/* Mini App URL */}
+            {questDetails.url && (
+              <div className="bg-gray-900 rounded-lg p-4">
+                <h4 className="text-sm font-semibold text-gray-400 mb-2">Quest Link</h4>
+                <a 
+                  href={questDetails.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-400 hover:text-blue-300 text-sm break-all"
+                >
+                  {questDetails.url}
+                </a>
+              </div>
+            )}
           </div>
         </div>
 
@@ -399,7 +381,7 @@ export default function QuestPage() {
               {!isParticipant ? (
                 <Button
                   onClick={handleJoinQuest}
-                  disabled={actionLoading || questDetails.participants.length >= quest.config.participantLimits.max}
+                  disabled={actionLoading || (config.participantLimits && questDetails.participants.length >= config.participantLimits.max)}
                   className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600"
                 >
                   {actionLoading ? 'Joining...' : 'Join Quest 🎮'}
@@ -444,4 +426,4 @@ export default function QuestPage() {
       </div>
     </SafeAreaContainer>
   );
-} 
+}

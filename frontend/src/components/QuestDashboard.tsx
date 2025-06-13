@@ -2,240 +2,141 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useXMTP } from "@/context/xmtp-context";
+import { useQuestWebSocket } from "@/hooks/useQuestWebSocket";
+import type { Quest, UserProfile, QuestMasterPersonality, WebSocketMessage } from "@/types/quest";
 
-interface Quest {
-  id: string;
-  type: "social_challenge" | "knowledge_quest" | "creative_contest" | "community_building" | "cross_protocol";
-  title: string;
-  description: string;
-  difficulty: "easy" | "medium" | "hard" | "expert";
-  duration: number;
-  participantLimits: {
-    min: number;
-    max: number;
-  };
-  rewards: {
-    xp: number;
-    tokens?: number;
-    badges?: string[];
-  };
-  requirements: string[];
-  miniAppConfig: {
-    type: "dashboard" | "game" | "poll" | "leaderboard" | "gallery";
-    config: {
-      theme: string;
-      features: string[];
-    };
-  };
-  conversationId: string;
-  status: "active" | "completed" | "expired";
-  participants: string[];
-  createdAt: string;
-  expiresAt: string;
-}
-
-interface UserStats {
-  level: number;
-  xp: number;
-  questsCompleted: number;
-  socialScore: number;
-  lastActive: string;
-}
-
-interface QuestMaster {
-  name: string;
-  description: string;
-  questTypes: string[];
-  style: string;
-}
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:3001";
-const API_SECRET = process.env.NEXT_PUBLIC_API_SECRET || "xmtp-social-quest-arena-secret-key-2024";
+const QUEST_MASTERS: QuestMasterPersonality[] = [
+  {
+    name: "The Mentor",
+    description: "Guides users through skill development and learning",
+    questTypes: ["knowledge_quest", "community_building"],
+    style: "encouraging"
+  },
+  {
+    name: "The Competitor",
+    description: "Creates competitive challenges and tournaments",
+    questTypes: ["social_challenge", "knowledge_quest"],
+    style: "competitive"
+  },
+  {
+    name: "The Creator",
+    description: "Fosters artistic and creative expression",
+    questTypes: ["creative_contest", "community_building"],
+    style: "creative"
+  },
+  {
+    name: "The Connector",
+    description: "Facilitates networking and relationship building",
+    questTypes: ["social_challenge", "community_building"],
+    style: "analytical"
+  },
+  {
+    name: "The Explorer",
+    description: "Introduces users to new protocols and technologies",
+    questTypes: ["cross_protocol", "knowledge_quest"],
+    style: "adventurous"
+  }
+];
 
 export default function QuestDashboard() {
   const { client } = useXMTP();
   const [activeQuests, setActiveQuests] = useState<Quest[]>([]);
-  const [userStats, setUserStats] = useState<UserStats | null>(null);
-  const [questMasters] = useState<QuestMaster[]>([
-    {
-      name: "The Mentor",
-      description: "Guides users through skill development and learning",
-      questTypes: ["knowledge_quest", "community_building"],
-      style: "encouraging"
-    },
-    {
-      name: "The Competitor",
-      description: "Creates competitive challenges and tournaments",
-      questTypes: ["social_challenge", "knowledge_quest"],
-      style: "competitive"
-    },
-    {
-      name: "The Creator",
-      description: "Fosters artistic and creative expression",
-      questTypes: ["creative_contest", "community_building"],
-      style: "creative"
-    },
-    {
-      name: "The Connector",
-      description: "Facilitates networking and relationship building",
-      questTypes: ["social_challenge", "community_building"],
-      style: "analytical"
-    },
-    {
-      name: "The Explorer",
-      description: "Introduces users to new protocols and technologies",
-      questTypes: ["cross_protocol", "knowledge_quest"],
-      style: "adventurous"
-    }
-  ]);
+  const [userStats, setUserStats] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [ws, setWs] = useState<WebSocket | null>(null);
-  const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "disconnected">("disconnected");
 
-  // API helper function
-  const apiCall = useCallback(async (endpoint: string, options: RequestInit = {}) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        ...options,
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-secret": API_SECRET,
-          ...options.headers,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`API call failed: ${response.status} ${response.statusText}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      console.error(`API call to ${endpoint} failed:`, error);
-      throw error;
+  // Handle WebSocket messages
+  const handleWebSocketMessage = useCallback((message: WebSocketMessage) => {
+    switch (message.type) {
+      case "subscribed":
+        console.log("✅ Subscribed to Quest Arena updates");
+        break;
+      case "questCreated":
+        setActiveQuests(prev => {
+          const exists = prev.some(q => q.id === message.data.quest.id);
+          return exists ? prev : [...prev, message.data.quest];
+        });
+        console.log("🎯 New quest available!");
+        break;
+      case "questCompleted":
+        setActiveQuests(prev => 
+          prev.filter(quest => quest.id !== message.data.questId)
+        );
+        // Refresh user stats after quest completion
+        void fetchUserStats();
+        break;
+      case "userStats":
+        setUserStats(message.data);
+        break;
+      case "activeQuests":
+        setActiveQuests(message.data);
+        break;
+      case "error":
+        setError(message.data);
+        break;
     }
   }, []);
 
-  // WebSocket connection with reconnection logic
-  useEffect(() => {
-    if (!client) return;
-
-    let reconnectAttempts = 0;
-    const maxReconnectAttempts = 5;
-    const reconnectDelay = 3000;
-
-    const connectWebSocket = () => {
-      setConnectionStatus("connecting");
-      const websocket = new WebSocket(WS_URL);
-      
-      websocket.onopen = () => {
-        console.log("🔌 Connected to Quest Arena WebSocket");
-        setConnectionStatus("connected");
-        reconnectAttempts = 0;
-        websocket.send(JSON.stringify({ 
-          type: "subscribe",
-          data: { userInboxId: client.inboxId }
-        }));
-      };
-
-      websocket.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          console.log("📨 Quest update received:", message);
-          
-          switch (message.type) {
-            case "subscribed":
-              console.log("✅ Subscribed to Quest Arena updates");
-              break;
-            case "questCreated":
-              setActiveQuests(prev => {
-                const exists = prev.some(q => q.id === message.data.quest.id);
-                return exists ? prev : [...prev, message.data.quest];
-              });
-              console.log("🎯 New quest available!");
-              break;
-            case "questCompleted":
-              setActiveQuests(prev => 
-                prev.filter(quest => quest.id !== message.data.questId)
-              );
-              // Refresh user stats after quest completion
-              void fetchUserStats();
-              break;
-            case "userStats":
-              setUserStats(message.data);
-              break;
-            case "error":
-              setError(message.data);
-              break;
-          }
-        } catch (error) {
-          console.error("Error parsing WebSocket message:", error);
-        }
-      };
-
-      websocket.onclose = () => {
-        console.log("🔌 Quest Arena WebSocket disconnected");
-        setConnectionStatus("disconnected");
-        
-        // Attempt to reconnect
-        if (reconnectAttempts < maxReconnectAttempts) {
-          reconnectAttempts++;
-          console.log(`🔄 Attempting to reconnect (${reconnectAttempts}/${maxReconnectAttempts})...`);
-          setTimeout(connectWebSocket, reconnectDelay);
-        } else {
-          console.error("❌ Max reconnection attempts reached");
-          setError("Connection lost. Please refresh the page.");
-        }
-      };
-
-      websocket.onerror = (error) => {
-        console.error("❌ WebSocket error:", error);
-        setConnectionStatus("disconnected");
-      };
-
-      setWs(websocket);
-    };
-
-    connectWebSocket();
-
-    return () => {
-      if (ws) {
-        ws.close();
+  // Initialize WebSocket connection
+  const {
+    connectionStatus,
+    subscribe,
+    joinQuest: wsJoinQuest,
+    getUserStats: wsGetUserStats,
+    getActiveQuests: wsGetActiveQuests,
+  } = useQuestWebSocket({
+    onMessage: handleWebSocketMessage,
+    onConnect: () => {
+      if (client?.inboxId) {
+        subscribe(client.inboxId);
       }
-    };
-  }, [client]);
+    },
+  });
 
   // Fetch user stats
   const fetchUserStats = useCallback(async () => {
     if (!client?.inboxId) return;
     
     try {
-      const stats = await apiCall(`/api/quests/user/${client.inboxId}/stats`);
-      setUserStats(stats);
+      const response = await fetch(`/api/quests/user/${client.inboxId}/stats`);
+      if (response.ok) {
+        const stats = await response.json();
+        setUserStats(stats);
+      } else {
+        // Try WebSocket fallback
+        wsGetUserStats(client.inboxId);
+      }
     } catch (error) {
       console.error("Error fetching user stats:", error);
       // Set default stats if API fails
       setUserStats({
+        inboxId: client.inboxId,
         level: 1,
         xp: 0,
-        questsCompleted: 0,
+        preferences: [],
+        completedQuests: [],
         socialScore: 0,
         lastActive: new Date().toISOString()
       });
     }
-  }, [client?.inboxId, apiCall]);
+  }, [client?.inboxId, wsGetUserStats]);
 
   // Fetch active quests
   const fetchActiveQuests = useCallback(async () => {
     try {
-      const quests = await apiCall("/api/quests/active");
-      setActiveQuests(quests);
+      const response = await fetch("/api/quests/active");
+      if (response.ok) {
+        const quests = await response.json();
+        setActiveQuests(quests);
+      } else {
+        // Try WebSocket fallback
+        wsGetActiveQuests();
+      }
     } catch (error) {
       console.error("Error fetching active quests:", error);
       setActiveQuests([]);
     }
-  }, [apiCall]);
+  }, [wsGetActiveQuests]);
 
   // Initial data fetch
   useEffect(() => {
@@ -264,58 +165,67 @@ export default function QuestDashboard() {
 
   // Join quest action
   const joinQuest = useCallback((quest: Quest) => {
-    if (!ws || !client || !client.inboxId) {
+    if (!client?.inboxId) {
       setError("Not connected to quest system");
       return;
     }
 
     // Check if user meets requirements
-    if (quest.requirements.length > 0) {
-      // Could add requirement validation here
+    if (quest.requirements && quest.requirements.length > 0) {
       console.log("Quest requirements:", quest.requirements);
     }
 
-    ws.send(JSON.stringify({
-      type: "questAction",
-      data: {
-        action: "joinQuest",
-        questId: quest.id,
-        userInboxId: client.inboxId,
-        conversationId: quest.conversationId
-      },
-    }));
-
-    // Update local state optimistically
-    setActiveQuests(prev => 
-      prev.map(q => 
-        q.id === quest.id && client.inboxId
-          ? { ...q, participants: [...q.participants, client.inboxId] }
-          : q
-      )
-    );
-
-    console.log("🎮 Joined quest:", quest.title);
-  }, [ws, client]);
+    // Use WebSocket to join quest
+    const success = wsJoinQuest(quest.id, client.inboxId, quest.conversationId);
+    
+    if (success) {
+      // Update local state optimistically
+      setActiveQuests(prev => 
+        prev.map(q => 
+          q.id === quest.id
+            ? { ...q, participants: [...q.participants, client.inboxId!] }
+            : q
+        )
+      );
+      console.log("🎮 Joined quest:", quest.title);
+    } else {
+      setError("Failed to join quest - not connected");
+    }
+  }, [client?.inboxId, wsJoinQuest]);
 
   // Trigger manual quest creation (for testing)
   const triggerQuest = useCallback(async () => {
-    if (!client || !client.inboxId) return;
+    if (!client?.inboxId) return;
 
     try {
       // Get current group ID from XMTP context or API
-      const groupInfo = await apiCall(`/api/xmtp/get-group-id?inboxId=${client.inboxId}`);
+      const groupResponse = await fetch(`/api/proxy/get-group-id?inboxId=${client.inboxId}`);
+      const groupInfo = await groupResponse.json();
       
       if (groupInfo.groupId) {
-        await apiCall("/api/quests/trigger", {
+        const response = await fetch("/api/quests/trigger", {
           method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify({ conversationId: groupInfo.groupId })
         });
+        
+        if (!response.ok) {
+          throw new Error("Failed to trigger quest");
+        }
+        
+        const data = await response.json();
+        if (data.success && data.quest) {
+          console.log("✅ Quest triggered successfully");
+          // Quest will be added via WebSocket
+        }
       }
     } catch (error) {
       console.error("Error triggering quest:", error);
       setError("Failed to trigger quest creation");
     }
-  }, [client, apiCall]);
+  }, [client?.inboxId]);
 
   const getDifficultyColor = (difficulty: string) => {
     switch (difficulty) {
@@ -343,6 +253,7 @@ export default function QuestDashboard() {
       case "connected": return "text-green-400";
       case "connecting": return "text-yellow-400";
       case "disconnected": return "text-red-400";
+      case "error": return "text-red-600";
       default: return "text-gray-400";
     }
   };
@@ -381,6 +292,7 @@ export default function QuestDashboard() {
           {connectionStatus === "connected" && "🟢 Connected"}
           {connectionStatus === "connecting" && "🟡 Connecting..."}
           {connectionStatus === "disconnected" && "🔴 Disconnected"}
+          {connectionStatus === "error" && "❌ Connection Error"}
         </span>
       </div>
 
@@ -432,7 +344,7 @@ export default function QuestDashboard() {
             </div>
             <div className="bg-green-800/30 rounded p-2">
               <div className="text-gray-300">Completed</div>
-              <div className="text-green-400 font-bold text-lg">{userStats.questsCompleted}</div>
+              <div className="text-green-400 font-bold text-lg">{userStats.completedQuests.length}</div>
             </div>
             <div className="bg-pink-800/30 rounded p-2">
               <div className="text-gray-300">Social Score</div>
@@ -449,7 +361,7 @@ export default function QuestDashboard() {
           Each Quest Master has a unique personality and creates different types of challenges
         </p>
         <div className="grid grid-cols-1 gap-2">
-          {questMasters.map((master) => (
+          {QUEST_MASTERS.map((master) => (
             <div
               key={master.name}
               className="bg-gray-800 rounded p-2 border border-gray-600 hover:border-purple-500 transition-colors"
@@ -506,7 +418,8 @@ export default function QuestDashboard() {
           <div className="space-y-3">
             {activeQuests.map((quest) => {
               const isParticipant = client.inboxId ? quest.participants.includes(client.inboxId) : false;
-              const timeRemaining = new Date(quest.expiresAt).getTime() - Date.now();
+              const expiresAt = new Date(quest.expiresAt);
+              const timeRemaining = expiresAt.getTime() - Date.now();
               const hoursRemaining = Math.max(0, Math.floor(timeRemaining / (1000 * 60 * 60)));
               const minutesRemaining = Math.max(0, Math.floor((timeRemaining % (1000 * 60 * 60)) / (1000 * 60)));
               
@@ -544,7 +457,7 @@ export default function QuestDashboard() {
                   
                   <p className="text-gray-300 text-sm mb-3">{quest.description}</p>
                   
-                  {quest.requirements.length > 0 && (
+                  {quest.requirements && quest.requirements.length > 0 && (
                     <div className="mb-3">
                       <div className="text-xs text-gray-400 mb-1">Requirements:</div>
                       <div className="flex flex-wrap gap-1">
@@ -569,19 +482,30 @@ export default function QuestDashboard() {
                       {quest.participants.length} joined
                       {isParticipant && " • You're participating!"}
                     </span>
-                    {!isParticipant && timeRemaining > 0 && (
-                      <button
-                        onClick={() => joinQuest(quest)}
-                        className="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white text-xs rounded-full transition-colors"
-                      >
-                        Join Quest
-                      </button>
-                    )}
-                    {isParticipant && (
-                      <span className="text-xs text-purple-400 font-medium">
-                        ✅ Joined
-                      </span>
-                    )}
+                    <div className="flex gap-2">
+                      {!isParticipant && timeRemaining > 0 && (
+                        <button
+                          onClick={() => joinQuest(quest)}
+                          disabled={quest.participants.length >= quest.participantLimits.max}
+                          className="px-3 py-1 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 text-white text-xs rounded-full transition-colors"
+                        >
+                          Join Quest
+                        </button>
+                      )}
+                      {timeRemaining > 0 && (
+                        <a
+                          href={`/quest/${quest.id}?conversationId=${quest.conversationId}`}
+                          className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-full transition-colors"
+                        >
+                          View Details
+                        </a>
+                      )}
+                      {isParticipant && (
+                        <span className="text-xs text-purple-400 font-medium">
+                          ✅ Joined
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -626,4 +550,4 @@ export default function QuestDashboard() {
       </div>
     </div>
   );
-} 
+}
