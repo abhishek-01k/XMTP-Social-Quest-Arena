@@ -304,7 +304,7 @@ export default function QuestDashboard() {
           </div>
           <div className="flex items-start gap-2">
             <span className="text-purple-400">2.</span>
-            <span>Based on conversation patterns, they'll create personalized quests</span>
+            <span>Based on conversation patterns, they&apos;ll create personalized quests</span>
           </div>
           <div className="flex items-start gap-2">
             <span className="text-purple-400">3.</span>
