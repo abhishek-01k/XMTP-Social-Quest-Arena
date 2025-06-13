@@ -4,7 +4,7 @@ const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:3001";
 const API_SECRET = process.env.API_SECRET_KEY || "xmtp-social-quest-arena-secret-key-2024";
 
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: { inboxId: string } }
 ) {
   try {
