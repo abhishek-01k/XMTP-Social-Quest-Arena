@@ -62,15 +62,28 @@ const initializeQuestMasters = () => {
     questMasters.set(personality.name, questMaster);
     
     // Listen for quest events
-    questMaster.on("questCreated", (quest: Quest, conversationId: string) => {
+    questMaster.on("questCreated", async (quest: Quest, conversationId: string) => {
       console.log(`🎯 Quest "${quest.title}" created by ${personality.name} for conversation ${conversationId}`);
       broadcastToClients({
         type: "questCreated",
         data: { quest, conversationId, questMaster: personality.name }
       });
       
-      // Launch mini app for the quest
-      void miniAppLauncher.launchQuestMiniApp(quest, conversationId);
+      // Get the conversation object to pass to MiniAppLauncher
+      try {
+        const conversation = await xmtpClient.conversations.getConversationById(conversationId);
+        if (conversation && conversation instanceof Group) {
+          // Launch mini app for the quest with conversation object
+          await miniAppLauncher.launchQuestMiniApp(quest, conversationId, conversation as Group<any>);
+        } else {
+          // Fallback without conversation object
+          await miniAppLauncher.launchQuestMiniApp(quest, conversationId);
+        }
+      } catch (error) {
+        console.error("❌ Error launching mini app:", error);
+        // Fallback without conversation object
+        await miniAppLauncher.launchQuestMiniApp(quest, conversationId);
+      }
     });
     
     questMaster.on("questCompleted", (completion) => {
@@ -140,7 +153,7 @@ const initializeXmtpClient = async () => {
   
   // Initialize services
   questOrchestrator = new QuestOrchestrator(questMasters, xmtpClient);
-  miniAppLauncher = new MiniAppLauncher();
+  miniAppLauncher = new MiniAppLauncher(process.env.NEXT_PUBLIC_URL || 'http://localhost:3000');
   
   // Start monitoring conversations for quest opportunities
   void startConversationMonitoring();
@@ -444,6 +457,148 @@ app.get("/api/quests/user/:inboxId/stats", validateApiSecret, async (req: Reques
   }
 });
 
+// Get quest details by ID
+app.get("/api/quests/:questId", validateApiSecret, async (req: Request, res: Response) => {
+  try {
+    const { questId } = req.params;
+    const miniAppConfig = miniAppLauncher.getMiniAppConfig(questId);
+    
+    if (!miniAppConfig) {
+      return res.status(404).json({ error: "Quest not found" });
+    }
+    
+    res.json({
+      quest: miniAppConfig,
+      participants: miniAppLauncher.getQuestParticipants(questId),
+      isActive: miniAppLauncher.isQuestActive(questId),
+      url: miniAppLauncher.getMiniAppUrl(questId)
+    });
+  } catch (error) {
+    console.error("❌ Error fetching quest details:", error);
+    res.status(500).json({ error: "Failed to fetch quest details" });
+  }
+});
+
+// Join a quest
+app.post("/api/quests/:questId/join", validateApiSecret, async (req: Request, res: Response) => {
+  try {
+    const { questId } = req.params;
+    const { inboxId } = req.body;
+    
+    if (!inboxId) {
+      return res.status(400).json({ error: "Missing inboxId" });
+    }
+    
+    const success = miniAppLauncher.addParticipant(questId, inboxId);
+    
+    if (success) {
+      // Broadcast participant joined event
+      broadcastToClients({
+        type: "participantJoined",
+        data: { questId, inboxId }
+      });
+      
+      res.json({ success: true, message: "Successfully joined quest" });
+    } else {
+      res.status(400).json({ error: "Failed to join quest" });
+    }
+  } catch (error) {
+    console.error("❌ Error joining quest:", error);
+    res.status(500).json({ error: "Failed to join quest" });
+  }
+});
+
+// Leave a quest
+app.post("/api/quests/:questId/leave", validateApiSecret, async (req: Request, res: Response) => {
+  try {
+    const { questId } = req.params;
+    const { inboxId } = req.body;
+    
+    if (!inboxId) {
+      return res.status(400).json({ error: "Missing inboxId" });
+    }
+    
+    const success = miniAppLauncher.removeParticipant(questId, inboxId);
+    
+    if (success) {
+      // Broadcast participant left event
+      broadcastToClients({
+        type: "participantLeft",
+        data: { questId, inboxId }
+      });
+      
+      res.json({ success: true, message: "Successfully left quest" });
+    } else {
+      res.status(400).json({ error: "Failed to leave quest" });
+    }
+  } catch (error) {
+    console.error("❌ Error leaving quest:", error);
+    res.status(500).json({ error: "Failed to leave quest" });
+  }
+});
+
+// Complete a quest
+app.post("/api/quests/:questId/complete", validateApiSecret, async (req: Request, res: Response) => {
+  try {
+    const { questId } = req.params;
+    const { inboxId, result } = req.body;
+    
+    if (!inboxId) {
+      return res.status(400).json({ error: "Missing inboxId" });
+    }
+    
+    // Complete the quest in mini app launcher
+    const success = miniAppLauncher.completeQuest(questId, inboxId);
+    
+    if (success && questOrchestrator) {
+      // Process quest completion through orchestrator
+      const questMasterNames = Array.from(questMasters.keys());
+      const randomQuestMaster = questMasters.get(
+        questMasterNames[Math.floor(Math.random() * questMasterNames.length)]
+      );
+      
+      if (randomQuestMaster) {
+        await randomQuestMaster.completeQuest(questId, inboxId, result);
+      }
+      
+      // Broadcast quest completion event
+      broadcastToClients({
+        type: "questCompleted",
+        data: { questId, inboxId, result }
+      });
+      
+      res.json({ success: true, message: "Quest completed successfully" });
+    } else {
+      res.status(400).json({ error: "Failed to complete quest" });
+    }
+  } catch (error) {
+    console.error("❌ Error completing quest:", error);
+    res.status(500).json({ error: "Failed to complete quest" });
+  }
+});
+
+// Get all mini apps
+app.get("/api/miniapps", validateApiSecret, async (req: Request, res: Response) => {
+  try {
+    const activeMiniApps = miniAppLauncher.getActiveMiniApps();
+    res.json(activeMiniApps);
+  } catch (error) {
+    console.error("❌ Error fetching mini apps:", error);
+    res.status(500).json({ error: "Failed to fetch mini apps" });
+  }
+});
+
+// Clean up expired mini apps
+app.post("/api/miniapps/cleanup", validateApiSecret, async (req: Request, res: Response) => {
+  try {
+    const cleaned = miniAppLauncher.cleanupExpiredMiniApps();
+    res.json({ success: true, cleaned });
+  } catch (error) {
+    console.error("❌ Error cleaning up mini apps:", error);
+    res.status(500).json({ error: "Failed to cleanup mini apps" });
+  }
+});
+
 app.post("/api/quests/trigger", validateApiSecret, async (req: Request, res: Response) => {
   try {
     // Manually trigger quest creation for testing
@@ -519,15 +674,114 @@ const handleQuestAction = async (data: any, ws: any) => {
   try {
     switch (data.action) {
       case "joinQuest":
-        // await questOrchestrator.joinQuest(data.questId, data.userInboxId);
+        if (data.questId && data.userInboxId) {
+          const success = miniAppLauncher.addParticipant(data.questId, data.userInboxId);
+          if (success) {
+            broadcastToClients({
+              type: "participantJoined",
+              data: { questId: data.questId, inboxId: data.userInboxId }
+            });
+            ws.send(JSON.stringify({ 
+              type: "questJoined", 
+              data: { questId: data.questId, success: true } 
+            }));
+          } else {
+            ws.send(JSON.stringify({ 
+              type: "error", 
+              data: "Failed to join quest" 
+            }));
+          }
+        }
         break;
+        
+      case "leaveQuest":
+        if (data.questId && data.userInboxId) {
+          const success = miniAppLauncher.removeParticipant(data.questId, data.userInboxId);
+          if (success) {
+            broadcastToClients({
+              type: "participantLeft",
+              data: { questId: data.questId, inboxId: data.userInboxId }
+            });
+            ws.send(JSON.stringify({ 
+              type: "questLeft", 
+              data: { questId: data.questId, success: true } 
+            }));
+          }
+        }
+        break;
+        
       case "completeQuest":
-        // await questOrchestrator.completeQuest(data.questId, data.userInboxId, data.result);
+        if (data.questId && data.userInboxId) {
+          const success = miniAppLauncher.completeQuest(data.questId, data.userInboxId);
+          if (success) {
+            // Process quest completion through orchestrator
+            const questMasterNames = Array.from(questMasters.keys());
+            const randomQuestMaster = questMasters.get(
+              questMasterNames[Math.floor(Math.random() * questMasterNames.length)]
+            );
+            
+            if (randomQuestMaster) {
+              await randomQuestMaster.completeQuest(data.questId, data.userInboxId, data.result);
+            }
+            
+            broadcastToClients({
+              type: "questCompleted",
+              data: { questId: data.questId, inboxId: data.userInboxId, result: data.result }
+            });
+            
+            ws.send(JSON.stringify({ 
+              type: "questCompleted", 
+              data: { questId: data.questId, success: true } 
+            }));
+          }
+        }
         break;
+        
       case "getUserStats":
-        // const stats = questOrchestrator.getUserStats(data.userInboxId);
-        ws.send(JSON.stringify({ type: "userStats", data: {} }));
+        if (data.userInboxId && questOrchestrator) {
+          const stats = questOrchestrator.getUserStats(data.userInboxId);
+          ws.send(JSON.stringify({ 
+            type: "userStats", 
+            data: stats || { level: 1, xp: 0, questsCompleted: 0, socialScore: 0 } 
+          }));
+        }
         break;
+        
+      case "getActiveQuests":
+        const activeQuests = questOrchestrator ? questOrchestrator.getActiveQuests() : [];
+        ws.send(JSON.stringify({ 
+          type: "activeQuests", 
+          data: activeQuests 
+        }));
+        break;
+        
+      case "getQuestDetails":
+        if (data.questId) {
+          const miniAppConfig = miniAppLauncher.getMiniAppConfig(data.questId);
+          if (miniAppConfig) {
+            ws.send(JSON.stringify({ 
+              type: "questDetails", 
+              data: {
+                quest: miniAppConfig,
+                participants: miniAppLauncher.getQuestParticipants(data.questId),
+                isActive: miniAppLauncher.isQuestActive(data.questId),
+                url: miniAppLauncher.getMiniAppUrl(data.questId)
+              }
+            }));
+          } else {
+            ws.send(JSON.stringify({ 
+              type: "error", 
+              data: "Quest not found" 
+            }));
+          }
+        }
+        break;
+        
+      default:
+        ws.send(JSON.stringify({ 
+          type: "error", 
+          data: `Unknown action: ${data.action}` 
+        }));
     }
   } catch (error: unknown) {
     console.error("❌ Error handling quest action:", error);
