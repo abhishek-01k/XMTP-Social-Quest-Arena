@@ -30,7 +30,7 @@ const nextConfig = {
     'viem',
     'uint8array-extras'
   ],
-  webpack: (config, { isServer }) => {
+  webpack: (config, { isServer, dev }) => {
     // Add extensionAlias for .js
     config.resolve = config.resolve || {};
     config.resolve.extensionAlias = {
@@ -72,9 +72,11 @@ const nextConfig = {
     }
 
     // Configure Terser to handle ES6 modules properly
-    if (config.optimization && config.optimization.minimizer) {
+    if (!dev && config.optimization && config.optimization.minimizer) {
       config.optimization.minimizer.forEach((minimizer) => {
         if (minimizer.constructor.name === 'TerserPlugin') {
+          // Modify existing Terser options
+          minimizer.options = minimizer.options || {};
           minimizer.options.terserOptions = {
             ...minimizer.options.terserOptions,
             parse: {
@@ -87,6 +89,13 @@ const nextConfig = {
               ecma: 2020,
             },
           };
+          
+          // Add exclude patterns
+          minimizer.options.exclude = [
+            ...(minimizer.options.exclude || []),
+            /HeartbeatWorker/,
+            /\.worker\./,
+          ];
         }
       });
     }
