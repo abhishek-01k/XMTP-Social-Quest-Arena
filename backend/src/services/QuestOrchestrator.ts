@@ -1,5 +1,6 @@
-import type { Client, Group, DecodedMessage } from "@xmtp/node-sdk";
 import { EventEmitter } from "events";
+import type { Client, DecodedMessage } from "@xmtp/node-sdk";
+import { Group } from "@xmtp/node-sdk";
 import type { QuestMaster } from "../agents/QuestMaster";
 import type { Quest, UserProfile, QuestCompletion } from "../types/Quest";
 
@@ -16,315 +17,324 @@ export class QuestOrchestrator extends EventEmitter {
     this.questMasters = questMasters;
     this.xmtpClient = xmtpClient;
     
-    // Listen to quest master events
+    // Listen to quest events from all Quest Masters
     this.setupQuestMasterListeners();
   }
 
+  /**
+   * Set up event listeners for all Quest Masters
+   */
   private setupQuestMasterListeners(): void {
     this.questMasters.forEach((questMaster, name) => {
       questMaster.on("questCreated", (quest: Quest, conversationId: string) => {
         this.activeQuests.set(quest.id, quest);
         this.emit("questCreated", quest, conversationId, name);
+        console.log(`📋 Quest Orchestrator: Registered quest "${quest.title}" from ${name}`);
       });
 
       questMaster.on("questCompleted", (completion: QuestCompletion) => {
         this.questHistory.push(completion);
         this.activeQuests.delete(completion.questId);
+        this.updateUserProfile(completion);
         this.emit("questCompleted", completion);
+        console.log(`🏆 Quest Orchestrator: Quest completed by ${completion.participantInboxId}`);
       });
     });
   }
 
   /**
-   * Determine if a quest should be created based on conversation activity
+   * Get all active quests across all Quest Masters
    */
-  async shouldCreateQuest(
-    conversation: Group,
-    message: DecodedMessage
-  ): Promise<boolean> {
-    const conversationId = conversation.id;
-    
-    // Get conversation analytics
-    const analytics = await this.getConversationAnalytics(conversationId);
-    
-    // Check if there's already an active quest for this conversation
-    const hasActiveQuest = Array.from(this.activeQuests.values())
-      .some(quest => quest.conversationId === conversationId && quest.status === "active");
-    
-    if (hasActiveQuest) {
-      return false;
+  getActiveQuests(conversationId?: string): Quest[] {
+    const quests = Array.from(this.activeQuests.values());
+    if (conversationId) {
+      return quests.filter(q => q.conversationId === conversationId && q.status === "active");
     }
-
-    // Quest creation criteria
-    const criteria = {
-      messagesSinceLastQuest: analytics.messagesSinceLastQuest || 0,
-      activeUsers: analytics.activeUsers || 0,
-      engagementLevel: analytics.engagementLevel || 0,
-      timeSinceLastQuest: analytics.timeSinceLastQuest || 0,
-    };
-
-    // Create quest if:
-    // - At least 10 messages since last quest
-    // - At least 2 active users
-    // - High engagement (>0.5)
-    // - At least 30 minutes since last quest
-    return (
-      criteria.messagesSinceLastQuest >= 10 &&
-      criteria.activeUsers >= 2 &&
-      criteria.engagementLevel > 0.5 &&
-      criteria.timeSinceLastQuest >= 30 * 60 * 1000 // 30 minutes in ms
-    );
+    return quests.filter(q => q.status === "active");
   }
 
   /**
-   * Create a quest for a specific conversation
+   * Get quest by ID
    */
-  async createQuestForConversation(
-    conversation: Group,
-    specificQuestMaster?: QuestMaster
-  ): Promise<Quest | null> {
-    try {
-      // Select appropriate quest master
-      const questMaster = specificQuestMaster || this.selectQuestMaster(conversation);
-      
-      if (!questMaster) {
-        console.error("No suitable Quest Master found");
-        return null;
-      }
-
-      // Get recent messages and members
-      const messages = await conversation.messages({ limit: 20 });
-      const members = await conversation.members();
-
-      // Create quest
-      const quest = await questMaster.analyzeAndCreateQuest(
-        conversation,
-        messages,
-        members
-      );
-
-      if (quest) {
-        // Send quest announcement to the group
-        const announcement = await questMaster.generateQuestAnnouncement(quest);
-        await conversation.send(announcement);
-        
-        // Update analytics
-        this.updateConversationAnalytics(conversation.id, {
-          lastQuestCreated: new Date(),
-          messagesSinceLastQuest: 0,
-        });
-
-        console.log(`🎯 Quest "${quest.title}" created for conversation ${conversation.id}`);
-      }
-
-      return quest;
-    } catch (error) {
-      console.error("Error creating quest:", error);
-      return null;
-    }
+  getQuestById(questId: string): Quest | undefined {
+    return this.activeQuests.get(questId);
   }
 
   /**
-   * Select the most appropriate Quest Master for a conversation
-   */
-  selectQuestMaster(conversation: Group): QuestMaster | null {
-    // For now, select randomly - could be enhanced with ML
-    const questMasterArray = Array.from(this.questMasters.values());
-    if (questMasterArray.length === 0) return null;
-    
-    const randomIndex = Math.floor(Math.random() * questMasterArray.length);
-    return questMasterArray[randomIndex];
-  }
-
-  /**
-   * Handle user joining a quest
+   * Join a quest
    */
   async joinQuest(questId: string, userInboxId: string): Promise<boolean> {
     const quest = this.activeQuests.get(questId);
-    if (!quest) return false;
+    if (!quest) {
+      throw new Error("Quest not found");
+    }
 
-    // Check if user is already participating
+    if (quest.status !== "active") {
+      throw new Error("Quest is not active");
+    }
+
     if (quest.participants.includes(userInboxId)) {
-      return false;
+      return false; // Already joined
     }
 
-    // Check participant limits
     if (quest.participants.length >= quest.participantLimits.max) {
-      return false;
+      throw new Error("Quest is full");
     }
 
-    // Add user to quest
+    // Add participant
     quest.participants.push(userInboxId);
     this.activeQuests.set(questId, quest);
 
-    // Update user profile
-    const userProfile = this.getUserProfile(userInboxId);
-    this.userProfiles.set(userInboxId, userProfile);
-
-    // Notify conversation
-    const conversation = await this.xmtpClient.conversations.getConversationById(quest.conversationId);
-    if (conversation) {
-      await conversation.send(`🎮 ${userInboxId.slice(0, 8)}... joined the quest "${quest.title}"!`);
+    // Update user preferences
+    const questMaster = this.getQuestMasterForQuest(quest);
+    if (questMaster) {
+      questMaster.updateUserPreferences(userInboxId, quest.type);
     }
 
-    this.emit("questJoined", { questId, userInboxId });
+    this.emit("questJoined", { questId, userInboxId, quest });
+    console.log(`👥 User ${userInboxId} joined quest "${quest.title}"`);
+    
     return true;
   }
 
   /**
-   * Handle quest completion
+   * Complete a quest
    */
   async completeQuest(
     questId: string, 
     userInboxId: string, 
     result: any
-  ): Promise<QuestCompletion | null> {
+  ): Promise<QuestCompletion> {
     const quest = this.activeQuests.get(questId);
-    if (!quest || !quest.participants.includes(userInboxId)) {
-      return null;
+    if (!quest) {
+      throw new Error("Quest not found");
     }
 
-    // Find the appropriate quest master
-    const questMaster = Array.from(this.questMasters.values())
-      .find(qm => qm.getActiveQuests().some(q => q.id === questId));
-
-    if (questMaster) {
-      await questMaster.completeQuest(questId, userInboxId, result);
+    if (!quest.participants.includes(userInboxId)) {
+      throw new Error("User is not a participant in this quest");
     }
 
-    // Create completion record
-    const completion: QuestCompletion = {
-      questId,
-      participantInboxId: userInboxId,
-      completedAt: new Date(),
-      result,
-      rewards: quest.rewards,
-      newLevel: this.getUserProfile(userInboxId).level,
-    };
+    const questMaster = this.getQuestMasterForQuest(quest);
+    if (!questMaster) {
+      throw new Error("Quest Master not found for this quest");
+    }
 
-    this.questHistory.push(completion);
+    // Complete the quest through the Quest Master
+    await questMaster.completeQuest(questId, userInboxId, result);
 
-    // Notify conversation
-    const conversation = await this.xmtpClient.conversations.getConversationById(quest.conversationId);
-    if (conversation) {
-      await conversation.send(
-        `🏆 ${userInboxId.slice(0, 8)}... completed "${quest.title}"! ` +
-        `Earned ${quest.rewards.xp} XP${quest.rewards.tokens ? ` and ${quest.rewards.tokens} tokens` : ""}!`
-      );
+    // The completion will be handled by the event listener
+    const completion = this.questHistory.find(
+      c => c.questId === questId && c.participantInboxId === userInboxId
+    );
+
+    if (!completion) {
+      throw new Error("Quest completion not recorded");
     }
 
     return completion;
   }
 
   /**
-   * Get conversation analytics
+   * Get user statistics
    */
-  private async getConversationAnalytics(conversationId: string): Promise<any> {
-    if (!this.conversationAnalytics.has(conversationId)) {
-      this.conversationAnalytics.set(conversationId, {
-        messagesSinceLastQuest: 0,
-        activeUsers: 0,
-        engagementLevel: 0,
-        timeSinceLastQuest: 0,
-        lastQuestCreated: null,
-      });
-    }
-
-    const analytics = this.conversationAnalytics.get(conversationId);
-    
-    // Update analytics with fresh data
-    try {
-      const conversation = await this.xmtpClient.conversations.getConversationById(conversationId);
-      if (conversation) {
-        const messages = await conversation.messages({ limit: 50 });
-        const members = await (conversation as Group).members();
-        
-        // Calculate active users (users who sent messages in last hour)
-        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-        const recentMessages = messages.filter(m => m.sentAt > oneHourAgo);
-        const activeUsers = new Set(recentMessages.map(m => m.senderInboxId)).size;
-        
-        // Calculate engagement level
-        const engagementLevel = members.length > 0 ? activeUsers / members.length : 0;
-        
-        // Update analytics
-        analytics.activeUsers = activeUsers;
-        analytics.engagementLevel = engagementLevel;
-        
-        if (analytics.lastQuestCreated) {
-          analytics.timeSinceLastQuest = Date.now() - analytics.lastQuestCreated.getTime();
-        }
-      }
-    } catch (error) {
-      console.error("Error updating conversation analytics:", error);
-    }
-
-    return analytics;
-  }
-
-  /**
-   * Update conversation analytics
-   */
-  private updateConversationAnalytics(conversationId: string, updates: any): void {
-    const current = this.conversationAnalytics.get(conversationId) || {};
-    this.conversationAnalytics.set(conversationId, { ...current, ...updates });
-  }
-
-  /**
-   * Get or create user profile
-   */
-  private getUserProfile(inboxId: string): UserProfile {
-    if (!this.userProfiles.has(inboxId)) {
-      this.userProfiles.set(inboxId, {
-        inboxId,
+  getUserStats(userInboxId: string): UserProfile {
+    let profile = this.userProfiles.get(userInboxId);
+    if (!profile) {
+      profile = {
+        inboxId: userInboxId,
         level: 1,
         xp: 0,
         preferences: [],
         completedQuests: [],
         socialScore: 0,
         lastActive: new Date(),
-      });
+      };
+      this.userProfiles.set(userInboxId, profile);
     }
-    return this.userProfiles.get(inboxId)!;
+    return profile;
   }
 
   /**
-   * Get user statistics
+   * Get quest leaderboard
    */
-  getUserStats(inboxId: string) {
-    const profile = this.getUserProfile(inboxId);
-    const completedQuests = this.questHistory.filter(
-      completion => completion.participantInboxId === inboxId
-    );
+  getLeaderboard(limit: number = 10): UserProfile[] {
+    return Array.from(this.userProfiles.values())
+      .sort((a, b) => b.xp - a.xp)
+      .slice(0, limit);
+  }
+
+  /**
+   * Get quest history for a user
+   */
+  getUserQuestHistory(userInboxId: string): QuestCompletion[] {
+    return this.questHistory.filter(c => c.participantInboxId === userInboxId);
+  }
+
+  /**
+   * Trigger quest creation for a conversation
+   */
+  async triggerQuestCreation(conversationId: string): Promise<Quest | null> {
+    try {
+      const conversation = await this.xmtpClient.conversations.getConversationById(conversationId);
+      if (!conversation || !(conversation instanceof Group)) {
+        throw new Error("Conversation not found or not a group");
+      }
+
+      // Get recent messages and members
+      const recentMessages = await conversation.messages({ limit: 10 });
+      const members = await conversation.members();
+
+      // Select a Quest Master based on conversation analysis
+      const selectedQuestMaster = this.selectQuestMaster(recentMessages, members);
+      
+      if (selectedQuestMaster) {
+        const quest = await selectedQuestMaster.analyzeAndCreateQuest(
+          conversation,
+          recentMessages,
+          members
+        );
+
+        if (quest) {
+          // Send quest announcement to the group
+          const announcement = await selectedQuestMaster.generateQuestAnnouncement(quest);
+          await conversation.send(announcement);
+          return quest;
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error("Error triggering quest creation:", error);
+      return null;
+    }
+  }
+
+  /**
+   * Select appropriate Quest Master based on conversation context
+   */
+  private selectQuestMaster(
+    messages: DecodedMessage[], 
+    members: any[]
+  ): QuestMaster | null {
+    // Simple selection logic - could be enhanced with ML
+    const questMasterNames = Array.from(this.questMasters.keys());
     
-    return {
-      level: profile.level,
-      xp: profile.xp,
-      questsCompleted: completedQuests.length,
-      socialScore: profile.socialScore,
-      recentAchievements: completedQuests.slice(-5),
-    };
-  }
+    // Analyze message content for keywords
+    const messageTexts = messages
+      .map(m => m.content as string)
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
 
-  /**
-   * Get active quests
-   */
-  getActiveQuests(): Quest[] {
-    return Array.from(this.activeQuests.values());
-  }
-
-  /**
-   * Notify about member changes
-   */
-  notifyMemberChange(conversationId: string, action: "added" | "removed", inboxId: string): void {
-    const analytics = this.conversationAnalytics.get(conversationId);
-    if (analytics) {
-      // Reset some analytics when membership changes
-      analytics.engagementLevel = 0;
-      this.conversationAnalytics.set(conversationId, analytics);
+    // Select based on content analysis
+    if (messageTexts.includes("learn") || messageTexts.includes("help") || messageTexts.includes("teach")) {
+      return this.questMasters.get("The Mentor") || null;
     }
     
-    this.emit("memberChange", { conversationId, action, inboxId });
+    if (messageTexts.includes("compete") || messageTexts.includes("challenge") || messageTexts.includes("win")) {
+      return this.questMasters.get("The Competitor") || null;
+    }
+    
+    if (messageTexts.includes("create") || messageTexts.includes("art") || messageTexts.includes("design")) {
+      return this.questMasters.get("The Creator") || null;
+    }
+    
+    if (messageTexts.includes("connect") || messageTexts.includes("network") || messageTexts.includes("community")) {
+      return this.questMasters.get("The Connector") || null;
+    }
+    
+    if (messageTexts.includes("protocol") || messageTexts.includes("web3") || messageTexts.includes("blockchain")) {
+      return this.questMasters.get("The Explorer") || null;
+    }
+
+    // Default to random selection
+    const randomIndex = Math.floor(Math.random() * questMasterNames.length);
+    return this.questMasters.get(questMasterNames[randomIndex]) || null;
+  }
+
+  /**
+   * Find the Quest Master that created a specific quest
+   */
+  private getQuestMasterForQuest(quest: Quest): QuestMaster | null {
+    // Since we don't store the creator, we'll need to find it by quest type preference
+    for (const [name, questMaster] of this.questMasters) {
+      const personality = questMaster.personality;
+      if (personality.questTypes.includes(quest.type)) {
+        return questMaster;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Update user profile after quest completion
+   */
+  private updateUserProfile(completion: QuestCompletion): void {
+    const profile = this.getUserStats(completion.participantInboxId);
+    
+    // Update XP and level
+    profile.xp += completion.rewards.xp;
+    profile.level = Math.floor(profile.xp / 100) + 1;
+    
+    // Add completed quest
+    if (!profile.completedQuests.includes(completion.questId)) {
+      profile.completedQuests.push(completion.questId);
+    }
+    
+    // Update social score based on quest type and performance
+    profile.socialScore += this.calculateSocialScoreIncrease(completion);
+    
+    // Update last active
+    profile.lastActive = new Date();
+    
+    this.userProfiles.set(completion.participantInboxId, profile);
+  }
+
+  /**
+   * Calculate social score increase based on quest completion
+   */
+  private calculateSocialScoreIncrease(completion: QuestCompletion): number {
+    const quest = this.activeQuests.get(completion.questId);
+    if (!quest) return 5; // Default increase
+
+    let increase = 5;
+    
+    // Bonus for different quest types
+    switch (quest.type) {
+      case "community_building":
+        increase += 10;
+        break;
+      case "social_challenge":
+        increase += 8;
+        break;
+      case "knowledge_quest":
+        increase += 6;
+        break;
+      case "creative_contest":
+        increase += 7;
+        break;
+      case "cross_protocol":
+        increase += 9;
+        break;
+    }
+    
+    // Bonus for difficulty
+    switch (quest.difficulty) {
+      case "expert":
+        increase += 15;
+        break;
+      case "hard":
+        increase += 10;
+        break;
+      case "medium":
+        increase += 5;
+        break;
+      case "easy":
+        increase += 2;
+        break;
+    }
+    
+    return increase;
   }
 
   /**
@@ -333,24 +343,61 @@ export class QuestOrchestrator extends EventEmitter {
   cleanupExpiredQuests(): void {
     const now = new Date();
     const expiredQuests: string[] = [];
-
+    
     this.activeQuests.forEach((quest, questId) => {
-      if (quest.expiresAt < now) {
+      if (new Date(quest.expiresAt) < now) {
+        quest.status = "expired";
         expiredQuests.push(questId);
       }
     });
-
+    
     expiredQuests.forEach(questId => {
-      const quest = this.activeQuests.get(questId);
+      this.activeQuests.delete(questId);
+      this.emit("questExpired", questId);
+    });
+    
+    if (expiredQuests.length > 0) {
+      console.log(`🕐 Quest Orchestrator: Cleaned up ${expiredQuests.length} expired quests`);
+    }
+  }
+
+  /**
+   * Get quest analytics
+   */
+  getQuestAnalytics() {
+    const totalQuests = this.activeQuests.size + this.questHistory.length;
+    const completedQuests = this.questHistory.length;
+    const activeUsers = new Set(this.questHistory.map(c => c.participantInboxId)).size;
+    
+    return {
+      totalQuests,
+      activeQuests: this.activeQuests.size,
+      completedQuests,
+      activeUsers,
+      averageXpPerQuest: completedQuests > 0 
+        ? this.questHistory.reduce((sum, c) => sum + c.rewards.xp, 0) / completedQuests 
+        : 0,
+      questTypeDistribution: this.getQuestTypeDistribution(),
+    };
+  }
+
+  /**
+   * Get distribution of quest types
+   */
+  private getQuestTypeDistribution() {
+    const distribution: Record<string, number> = {};
+    
+    this.activeQuests.forEach(quest => {
+      distribution[quest.type] = (distribution[quest.type] || 0) + 1;
+    });
+    
+    this.questHistory.forEach(completion => {
+      const quest = this.activeQuests.get(completion.questId);
       if (quest) {
-        quest.status = "expired";
-        this.activeQuests.delete(questId);
-        this.emit("questExpired", quest);
+        distribution[quest.type] = (distribution[quest.type] || 0) + 1;
       }
     });
-
-    if (expiredQuests.length > 0) {
-      console.log(`🧹 Cleaned up ${expiredQuests.length} expired quests`);
-    }
+    
+    return distribution;
   }
 } 
