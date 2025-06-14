@@ -15,7 +15,7 @@ export function Header({ onLogout, isConnected }: HeaderProps) {
   return (
     <header className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
       <Link href="/" className="flex items-center gap-2">
-        <span className="text-white font-medium">xmtp-mini-app-examples</span>
+        <span className="text-white font-medium">xmtp-social-quest-arena</span>
       </Link>
 
       <div className="flex items-center space-x-2">
