@@ -51,7 +51,7 @@ interface QuestMaster {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:3001";
-const API_SECRET = process.env.NEXT_PUBLIC_API_SECRET || "your-secret-key";
+const API_SECRET = process.env.NEXT_PUBLIC_API_SECRET || "xmtp-social-quest-arena-secret-key-2024";
 
 export default function QuestDashboard() {
   const { client } = useXMTP();
@@ -208,8 +208,8 @@ export default function QuestDashboard() {
 
   // Fetch user stats
   const fetchUserStats = useCallback(async () => {
-    if (!client) return;
-
+    if (!client?.inboxId) return;
+    
     try {
       const stats = await apiCall(`/api/quests/user/${client.inboxId}/stats`);
       setUserStats(stats);
@@ -224,7 +224,7 @@ export default function QuestDashboard() {
         lastActive: new Date().toISOString()
       });
     }
-  }, [client, apiCall]);
+  }, [client?.inboxId, apiCall]);
 
   // Fetch active quests
   const fetchActiveQuests = useCallback(async () => {
