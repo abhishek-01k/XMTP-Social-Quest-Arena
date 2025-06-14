@@ -102,17 +102,20 @@ const initializeXmtpClient = async () => {
   console.log("📡 XMTP Client initialized with inbox ID:", xmtpClient.inboxId);
   await xmtpClient.conversations.sync();
   
-  let conversation: Group | undefined;
+  let conversation: Group<any> | undefined;
   console.log("🆔 GROUP_ID", GROUP_ID);
   
   if (GROUP_ID) {
     const conv = await xmtpClient.conversations.getConversationById(GROUP_ID);
-    conversation = conv instanceof Group ? conv : undefined;
+    conversation = conv instanceof Group ? conv as Group<any> : undefined;
   } else if (defaultInboxes.length > 0) {
-    conversation = await xmtpClient.conversations.newGroup(defaultInboxes);
-    console.log("🆕 New group created:", conversation.id);
-    GROUP_ID = conversation.id;
-    appendToEnv("GROUP_ID", GROUP_ID);
+    const newGroup = await xmtpClient.conversations.newGroup(defaultInboxes);
+    conversation = newGroup as Group<any>;
+    if (conversation) {
+      console.log("🆕 New group created:", conversation.id);
+      GROUP_ID = conversation.id;
+      appendToEnv("GROUP_ID", GROUP_ID);
+    }
   } else {
     console.log("⚠️ No default group created - will create groups dynamically");
   }
@@ -591,7 +594,7 @@ const handleNewMessage = async (message: DecodedMessage) => {
         const recentMessages = await conversation.messages({ limit: 10 });
         
         const quest = await randomQuestMaster.analyzeAndCreateQuest(
-          conversation as any,
+          conversation,
           recentMessages,
           members
         );
