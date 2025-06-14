@@ -4,9 +4,6 @@ import createJITI from "jiti";
 const jiti = createJITI(fileURLToPath(import.meta.url));
 jiti("./src/lib/env.ts");
 
-import TerserPlugin from 'terser-webpack-plugin';
-
-
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -33,26 +30,14 @@ const nextConfig = {
     'viem',
     'uint8array-extras'
   ],
-  webpack: (config, { dev , isServer }) => {
+  webpack: (config, { isServer }) => {
     // Add extensionAlias for .js
     config.resolve = config.resolve || {};
     config.resolve.extensionAlias = {
       ".js": [".ts", ".tsx", ".js", ".jsx"],
     };
-
-    if (!dev && !isServer) {
-      config.optimization.minimizer = [
-        new TerserPlugin({
-          exclude: /HeartbeatWorker\.js$/,
-        }),
-      ];
-    }
     
     if (!isServer) {
-      config.module.rules.push({
-        test: /HeartbeatWorker\.js$/,
-        type: 'asset/source',
-      });
       config.resolve.fallback = {
         ...config.resolve.fallback,
         fs: false,
@@ -74,6 +59,35 @@ const nextConfig = {
         resolve: {
           fullySpecified: false,
         },
+      });
+
+      // Specifically handle HeartbeatWorker and other worker files
+      config.module.rules.push({
+        test: /HeartbeatWorker\.js$/,
+        type: "javascript/auto",
+        parser: {
+          system: false,
+        },
+      });
+    }
+
+    // Configure Terser to handle ES6 modules properly
+    if (config.optimization && config.optimization.minimizer) {
+      config.optimization.minimizer.forEach((minimizer) => {
+        if (minimizer.constructor.name === 'TerserPlugin') {
+          minimizer.options.terserOptions = {
+            ...minimizer.options.terserOptions,
+            parse: {
+              ecma: 2020,
+            },
+            compress: {
+              ecma: 2020,
+            },
+            output: {
+              ecma: 2020,
+            },
+          };
+        }
       });
     }
 
