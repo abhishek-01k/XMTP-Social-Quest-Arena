@@ -1,5 +1,9 @@
 import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import createJITI from "jiti";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const jiti = createJITI(fileURLToPath(import.meta.url));
 jiti("./src/lib/env.ts");
@@ -28,13 +32,28 @@ const nextConfig = {
     '@wagmi/core',
     'wagmi',
     'viem',
-    'uint8array-extras'
+    'uint8array-extras',
+    '@coinbase/wallet-sdk'
   ],
   webpack: (config, { isServer, dev }) => {
+    // Add externals to exclude problematic files
+    config.externals = config.externals || [];
+    if (!isServer) {
+      config.externals.push({
+        '@coinbase/wallet-sdk/dist/sign/walletlink/relay/connection/HeartbeatWorker': 'commonjs @coinbase/wallet-sdk/dist/sign/walletlink/relay/connection/HeartbeatWorker',
+      });
+    }
+
     // Add extensionAlias for .js
     config.resolve = config.resolve || {};
     config.resolve.extensionAlias = {
       ".js": [".ts", ".tsx", ".js", ".jsx"],
+    };
+    
+    // Add alias to redirect problematic files
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      '@coinbase/wallet-sdk/dist/sign/walletlink/relay/connection/HeartbeatWorker': resolve(__dirname, './src/patches/HeartbeatWorker.js'),
     };
     
     if (!isServer) {
@@ -61,9 +80,16 @@ const nextConfig = {
         },
       });
 
-      // Specifically handle HeartbeatWorker and other worker files
+      // Specifically handle Coinbase wallet SDK worker files
       config.module.rules.push({
         test: /HeartbeatWorker\.js$/,
+        include: /node_modules\/@coinbase\/wallet-sdk/,
+        type: "asset/source",
+      });
+
+      // Handle other worker files
+      config.module.rules.push({
+        test: /\.worker\.(js|ts)$/,
         type: "javascript/auto",
         parser: {
           system: false,
@@ -71,7 +97,7 @@ const nextConfig = {
       });
     }
 
-    // Configure Terser to handle ES6 modules properly
+    // Configure Terser to handle ES6 modules properly and exclude problematic files
     if (!dev && config.optimization && config.optimization.minimizer) {
       config.optimization.minimizer.forEach((minimizer) => {
         if (minimizer.constructor.name === 'TerserPlugin') {
@@ -90,11 +116,12 @@ const nextConfig = {
             },
           };
           
-          // Add exclude patterns
+          // Add exclude patterns for Coinbase wallet SDK
           minimizer.options.exclude = [
             ...(minimizer.options.exclude || []),
             /HeartbeatWorker/,
             /\.worker\./,
+            /@coinbase\/wallet-sdk/,
           ];
         }
       });
