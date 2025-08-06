@@ -90,9 +90,18 @@ An innovative AI-powered mini app that transforms group chats into dynamic socia
 
 3. **Set environment variables**
    ```bash
-   # Add to .env.local
-   NEXT_PUBLIC_API_SECRET=your_api_secret
-   NEXT_PUBLIC_URL=http://localhost:3000
+   # Add to .env
+   NEYNAR_API_KEY="NEYNAR_API_DOCS"
+
+   # Auth JWT secret, generate yours with `openssl rand -base64 32`
+   JWT_SECRET=""
+   LOGGING_LEVEL=off
+
+   BACKEND_URL="https://mini-appbackend-production-3ef8.up.railway.app"
+
+   API_SECRET_KEY=""
+   NEXT_PUBLIC_API_SECRET=
+   NEXT_PUBLIC_URL=
    ```
 
 4. **Start the development server**
